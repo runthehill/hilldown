@@ -107,6 +107,7 @@ const browserFileName = "hilldown.md";
 const untitledTitle = "Untitled document";
 const slashMenuMargin = 12;
 const slashMenuGap = 8;
+const slashMenuListboxId = "hilldown-slash-menu";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -649,9 +650,14 @@ export function App() {
   const editorVisible = mode === "edit" || mode === "split";
   const previewVisible = mode === "preview" || mode === "split";
   const pathLabel = documentPath ?? (nativeFiles ? "No file selected" : "Browser fallback mode");
+  const slashMenuOpen = slashQuery !== null && visibleSlashCommands.length > 0;
+  const activeSlashOptionId =
+    slashMenuOpen && visibleSlashCommands[slashIndex]
+      ? `${slashMenuListboxId}-${visibleSlashCommands[slashIndex].id}`
+      : undefined;
 
   return (
-    <main className="app-shell">
+    <div className="app-shell">
       <header className="topbar">
         <div className="document-title">
           <div className="brand-mark" aria-hidden="true">H</div>
@@ -673,13 +679,13 @@ export function App() {
 
         <div className="topbar-actions">
           <div className="segmented" aria-label="View mode">
-            <button className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")} title="Edit">
+            <button className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")} title="Edit" aria-label="Edit view" aria-pressed={mode === "edit"}>
               <PanelLeft size={17} />
             </button>
-            <button className={mode === "split" ? "active" : ""} onClick={() => setMode("split")} title="Split">
+            <button className={mode === "split" ? "active" : ""} onClick={() => setMode("split")} title="Split" aria-label="Split view" aria-pressed={mode === "split"}>
               <Columns2 size={17} />
             </button>
-            <button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")} title="Preview">
+            <button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")} title="Preview" aria-label="Preview" aria-pressed={mode === "preview"}>
               <Eye size={17} />
             </button>
           </div>
@@ -703,12 +709,12 @@ export function App() {
         </div>
       </header>
 
-      <section className="toolbar" aria-label="Formatting toolbar">
+      <section className="toolbar" role="toolbar" aria-label="Formatting toolbar">
         <div className="history-controls">
-          <button className="icon-button" onClick={undo} disabled={historyIndex === 0} title="Undo">
+          <button className="icon-button" onClick={undo} disabled={historyIndex === 0} title="Undo" aria-label="Undo">
             <Undo2 size={17} />
           </button>
-          <button className="icon-button" onClick={redo} disabled={historyIndex === history.length - 1} title="Redo">
+          <button className="icon-button" onClick={redo} disabled={historyIndex === history.length - 1} title="Redo" aria-label="Redo">
             <Redo2 size={17} />
           </button>
         </div>
@@ -722,6 +728,7 @@ export function App() {
                   key={item.action}
                   onClick={() => runTool(item.action)}
                   title={item.label}
+                  aria-label={item.label}
                 >
                   <Icon size={17} />
                 </button>
@@ -731,7 +738,7 @@ export function App() {
         ))}
       </section>
 
-      <section className={`workspace ${mode}`}>
+      <main className={`workspace ${mode}`}>
         {editorVisible && (
           <section ref={editorPaneRef} className="editor-pane" aria-label="Markdown editor">
             <div className="pane-header">
@@ -749,10 +756,13 @@ export function App() {
               onScroll={updateSlashMenuPosition}
               onSelect={(event) => syncSelection(event.currentTarget)}
               aria-label="Markdown source"
+              aria-controls={slashMenuOpen ? slashMenuListboxId : undefined}
+              aria-activedescendant={activeSlashOptionId}
             />
             {slashQuery && visibleSlashCommands.length > 0 && (
               <div
                 ref={slashMenuRef}
+                id={slashMenuListboxId}
                 className="slash-menu"
                 style={{
                   left: slashMenuPosition.left,
@@ -765,6 +775,7 @@ export function App() {
                   <button
                     className={index === slashIndex ? "active" : ""}
                     key={command.id}
+                    id={`${slashMenuListboxId}-${command.id}`}
                     ref={(element) => {
                       slashItemRefs.current[index] = element;
                     }}
@@ -788,12 +799,12 @@ export function App() {
               <span>Preview</span>
               <span>{wordCount} words</span>
             </div>
-            <div className="preview-scroll">
+            <div className="preview-scroll" tabIndex={0} aria-label="Markdown preview">
               <article className="markdown-preview" dangerouslySetInnerHTML={{ __html: renderedHtml }} />
             </div>
           </section>
         )}
-      </section>
+      </main>
 
       <footer className="statusbar">
         <span>{wordCount} words</span>
@@ -802,7 +813,7 @@ export function App() {
           Ln {lineColumn.line}, Col {lineColumn.column}
         </span>
         <span>{slashCommands.length} slash commands</span>
-        <span className={`status-message ${status.tone}`}>{status.message}</span>
+        <span className={`status-message ${status.tone}`} role="status" aria-live="polite" aria-atomic="true">{status.message}</span>
         <div className="status-actions">
           <button onClick={copyMarkdown}>
             <Copy size={15} />
@@ -814,6 +825,6 @@ export function App() {
           </button>
         </div>
       </footer>
-    </main>
+    </div>
   );
 }
