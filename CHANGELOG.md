@@ -2,6 +2,21 @@
 
 All notable changes to HillDown will be documented in this file.
 
+## 0.3.0 - 2026-06-03
+
+### Added
+
+- Add self-hosted `@fontsource` typefaces — Hanken Grotesk, Newsreader, and IBM Plex Mono — bundled so the desktop app renders them offline.
+
+### Changed
+
+- Redesign the interface around a calm "paper & petrol ink" theme: warm paper surfaces, hairline structure, and a single restrained petrol accent in place of the previous gradient and card styling.
+- Give the app a typographic voice — Hanken Grotesk for chrome, Newsreader for the rendered preview, and IBM Plex Mono for raw source and code.
+- Replace card-style panes with seamless, measure-constrained writing and reading columns, and refine the toolbar, slash menu, tables, code blocks, blockquotes, and status bar.
+- Refresh the sample document into a short welcome that showcases the formatting.
+- Respect `prefers-reduced-motion` and keep motion to subtle load and menu transitions.
+- Bump app version from `0.2.1` to `0.3.0`.
+
 ## 0.2.1 - 2026-05-29
 
 ### Changed
