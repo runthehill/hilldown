@@ -20,3 +20,9 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-opener = "2"
+
+# macOS: opt the app out of system "smart dashes/quotes" text substitution,
+# which corrupts Markdown source (e.g. turns `---` into an em dash).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.4"
+objc2-foundation = { version = "=0.3.2", features = ["NSUserDefaults", "NSString"] }

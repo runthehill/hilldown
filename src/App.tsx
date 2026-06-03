@@ -36,7 +36,6 @@ import {
   getSlashQuery,
   indentLines,
   insertSnippet,
-  isSmartPunctuationSubstitution,
   outdentLines,
   slashCommands,
   TextSelection,
@@ -263,25 +262,6 @@ export function App() {
   useEffect(() => {
     isDirtyRef.current = isDirty;
   }, [isDirty]);
-
-  // Stop the OS smart-substitution (smart dashes/quotes) from rewriting the
-  // Markdown source — e.g. turning `---` into an em dash. We listen on the
-  // native `beforeinput` because React's synthetic event omits `inputType`.
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      return;
-    }
-
-    function handleBeforeInput(event: InputEvent) {
-      if (isSmartPunctuationSubstitution(event.inputType, event.data)) {
-        event.preventDefault();
-      }
-    }
-
-    textarea.addEventListener("beforeinput", handleBeforeInput);
-    return () => textarea.removeEventListener("beforeinput", handleBeforeInput);
-  }, []);
 
   function pushHistory(next: string) {
     const nextHistory = [...history.slice(0, historyIndex + 1), next].slice(-80);
@@ -768,6 +748,8 @@ export function App() {
             <textarea
               ref={textareaRef}
               spellCheck="true"
+              autoCorrect="off"
+              autoCapitalize="off"
               value={markdown}
               onChange={onTextChange}
               onClick={(event) => syncSelection(event.currentTarget)}

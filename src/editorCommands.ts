@@ -304,36 +304,3 @@ export function applySlashCommand(
     selectionEnd: cursor,
   };
 }
-
-// Typographic characters the OS "smart" substitution (smart dashes/quotes) swaps
-// plain keystrokes for. In Markdown *source* these silently corrupt syntax —
-// `---` rules become an em dash, straight quotes in code become curly — so the
-// editor rejects the substitution and keeps what was actually typed.
-const smartPunctuation = new Set([
-  "‐", // hyphen
-  "‑", // non-breaking hyphen
-  "‒", // figure dash
-  "–", // en dash
-  "—", // em dash
-  "―", // horizontal bar
-  "‘", // left single quote
-  "’", // right single quote / smart apostrophe
-  "“", // left double quote
-  "”", // right double quote
-  "…", // ellipsis
-]);
-
-/**
- * True when an `InputEvent` is the OS replacing typed characters with smart
- * punctuation. We match `insertReplacementText` whose payload is *only* smart
- * characters, so genuine spellcheck corrections (real words) are left alone.
- */
-export function isSmartPunctuationSubstitution(
-  inputType: string,
-  data: string | null,
-): boolean {
-  if (inputType !== "insertReplacementText" || !data) {
-    return false;
-  }
-  return [...data].every((char) => smartPunctuation.has(char));
-}

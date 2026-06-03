@@ -8,7 +8,6 @@ import {
   getSlashQuery,
   insertSnippet,
   indentLines,
-  isSmartPunctuationSubstitution,
   outdentLines,
   slashCommands,
 } from "./editorCommands";
@@ -144,29 +143,5 @@ describe("editor commands", () => {
   it("returns one-based line and column", () => {
     expect(getLineColumn("one\ntwo", 6)).toEqual({ line: 2, column: 3 });
     expect(getLineColumn("one", -5)).toEqual({ line: 1, column: 1 });
-  });
-
-  describe("isSmartPunctuationSubstitution", () => {
-    it("flags smart dash and quote substitutions", () => {
-      expect(isSmartPunctuationSubstitution("insertReplacementText", "—")).toBe(true);
-      expect(isSmartPunctuationSubstitution("insertReplacementText", "–")).toBe(true);
-      expect(isSmartPunctuationSubstitution("insertReplacementText", "“")).toBe(true);
-      expect(isSmartPunctuationSubstitution("insertReplacementText", "”")).toBe(true);
-      expect(isSmartPunctuationSubstitution("insertReplacementText", "’")).toBe(true);
-      expect(isSmartPunctuationSubstitution("insertReplacementText", "…")).toBe(true);
-    });
-
-    it("ignores normal typing and spellcheck corrections", () => {
-      expect(isSmartPunctuationSubstitution("insertText", "—")).toBe(false);
-      expect(isSmartPunctuationSubstitution("insertReplacementText", "definitely")).toBe(false);
-      expect(isSmartPunctuationSubstitution("insertReplacementText", "-")).toBe(false);
-      expect(isSmartPunctuationSubstitution("insertReplacementText", null)).toBe(false);
-      expect(isSmartPunctuationSubstitution("insertReplacementText", "")).toBe(false);
-    });
-
-    it("only rejects payloads made entirely of smart punctuation", () => {
-      // A correction that merely contains an em dash is a real edit, keep it.
-      expect(isSmartPunctuationSubstitution("insertReplacementText", "well—known")).toBe(false);
-    });
   });
 });

@@ -1452,6 +1452,8 @@ name = "hilldown"
 version = "0.3.1"
 dependencies = [
  "bitflags 2.9.4",
+ "objc2",
+ "objc2-foundation",
  "serde",
  "serde_json",
  "tauri",
