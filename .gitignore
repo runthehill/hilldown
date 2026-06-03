@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+src-tauri/gen/
+src-tauri/target/
+.DS_Store
+.env
+.env.*

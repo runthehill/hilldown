@@ -1,0 +1,174 @@
+use serde::Serialize;
+use std::{
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
+use tauri::{Emitter, Manager};
+
+const OPENED_FILES_EVENT: &str = "hilldown://open-files";
+
+#[derive(Default)]
+struct PendingOpenedFiles(Mutex<Vec<String>>);
+
+impl PendingOpenedFiles {
+    fn push(&self, paths: Vec<String>) {
+        let mut pending = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.extend(paths);
+    }
+
+    fn take(&self) -> Vec<String> {
+        let mut pending = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.drain(..).collect()
+    }
+}
+
+#[derive(Serialize)]
+struct OpenedMarkdownDocument {
+    contents: String,
+    name: String,
+    path: String,
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let app = tauri::Builder::default()
+        .manage(PendingOpenedFiles::default())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            read_markdown_document,
+            take_pending_opened_file_paths
+        ])
+        .setup(|app| {
+            let startup_paths = markdown_file_paths_from_args(std::env::args());
+            if !startup_paths.is_empty() {
+                app.state::<PendingOpenedFiles>().push(startup_paths);
+            }
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building Tauri application");
+
+    app.run(|app_handle, event| {
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        if let tauri::RunEvent::Opened { urls } = event {
+            enqueue_opened_file_paths(app_handle, markdown_file_paths_from_urls(urls));
+        }
+    });
+}
+
+#[tauri::command]
+fn take_pending_opened_file_paths(state: tauri::State<'_, PendingOpenedFiles>) -> Vec<String> {
+    state.take()
+}
+
+#[tauri::command]
+fn read_markdown_document(path: String) -> Result<OpenedMarkdownDocument, String> {
+    let path_buf = PathBuf::from(&path);
+    if !is_markdown_path(&path_buf) {
+        return Err(format!("Unsupported file type: {}", path_buf.display()));
+    }
+
+    let contents = std::fs::read_to_string(&path_buf)
+        .map_err(|error| format!("Failed to read {}: {error}", path_buf.display()))?;
+    let name = path_buf
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Untitled.md")
+        .to_string();
+
+    Ok(OpenedMarkdownDocument {
+        contents,
+        name,
+        path,
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+fn enqueue_opened_file_paths<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, paths: Vec<String>) {
+    if paths.is_empty() {
+        return;
+    }
+
+    app_handle.state::<PendingOpenedFiles>().push(paths.clone());
+    if let Err(error) = app_handle.emit(OPENED_FILES_EVENT, paths) {
+        eprintln!("failed to emit opened file paths: {error}");
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android", test))]
+fn markdown_file_paths_from_urls(urls: Vec<tauri::Url>) -> Vec<String> {
+    urls.into_iter()
+        .filter_map(|url| url.to_file_path().ok())
+        .filter_map(markdown_file_path_string)
+        .collect()
+}
+
+fn markdown_file_paths_from_args<I>(args: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    args.into_iter()
+        .skip(1)
+        .filter(|arg| !arg.starts_with('-'))
+        .filter_map(|arg| markdown_file_path_string(PathBuf::from(arg)))
+        .collect()
+}
+
+fn markdown_file_path_string(path: PathBuf) -> Option<String> {
+    is_markdown_path(&path).then(|| path.into_os_string().into_string().ok())?
+}
+
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "md" | "markdown" | "mdown" | "mkd"
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filters_opened_urls_to_markdown_file_paths() {
+        let urls = vec![
+            tauri::Url::from_file_path("/tmp/notes.md").expect("file URL"),
+            tauri::Url::from_file_path("/tmp/readme.markdown").expect("file URL"),
+            tauri::Url::parse("https://example.com/remote.md").expect("remote URL"),
+            tauri::Url::from_file_path("/tmp/image.png").expect("file URL"),
+        ];
+
+        assert_eq!(
+            markdown_file_paths_from_urls(urls),
+            vec![
+                "/tmp/notes.md".to_string(),
+                "/tmp/readme.markdown".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn filters_startup_args_to_markdown_file_paths() {
+        assert_eq!(
+            markdown_file_paths_from_args([
+                "/Applications/HillDown.app/Contents/MacOS/hilldown".to_string(),
+                "/tmp/notes.md".to_string(),
+                "--flag".to_string(),
+                "/tmp/draft.txt".to_string(),
+            ]),
+            vec!["/tmp/notes.md".to_string()],
+        );
+    }
+}
