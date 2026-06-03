@@ -35,8 +35,33 @@ struct OpenedMarkdownDocument {
     path: String,
 }
 
+/// Opt HillDown out of macOS automatic text substitution — smart dashes,
+/// smart quotes, text replacement, and period substitution (one default key
+/// each, see below). The editor works on raw Markdown, where these corrupt
+/// syntax — e.g. `---` becomes an em dash and never renders as a horizontal
+/// rule. Overriding these defaults in the app domain takes precedence over
+/// the system-wide setting the text engine would otherwise consult. Must run
+/// before the WebView's text system starts editing.
+#[cfg(target_os = "macos")]
+fn disable_smart_substitutions() {
+    use objc2_foundation::{NSString, NSUserDefaults};
+
+    let defaults = NSUserDefaults::standardUserDefaults();
+    for key in [
+        "NSAutomaticDashSubstitutionEnabled",
+        "NSAutomaticQuoteSubstitutionEnabled",
+        "NSAutomaticTextReplacementEnabled",
+        "NSAutomaticPeriodSubstitutionEnabled",
+    ] {
+        defaults.setBool_forKey(false, &NSString::from_str(key));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    disable_smart_substitutions();
+
     let app = tauri::Builder::default()
         .manage(PendingOpenedFiles::default())
         .plugin(tauri_plugin_dialog::init())

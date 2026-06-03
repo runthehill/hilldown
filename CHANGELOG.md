@@ -2,6 +2,13 @@
 
 All notable changes to HillDown will be documented in this file.
 
+## 0.3.1 - 2026-06-03
+
+### Fixed
+
+- Opt the app out of the operating system's smart-punctuation substitution so it no longer rewrites the Markdown source — typing `---`, `--`, straight quotes, or `...` now stays literal instead of being replaced with em dashes, curly quotes, or an ellipsis. On macOS this is disabled at the application level (the desktop shell overrides the relevant `NSAutomatic…SubstitutionEnabled` defaults); the editor also sets `autocorrect`/`autocapitalize` off as a cross-platform fallback. Pasting typographic characters and spellcheck corrections are unaffected.
+- Bump app version from `0.3.0` to `0.3.1`.
+
 ## 0.3.0 - 2026-06-03
 
 ### Added

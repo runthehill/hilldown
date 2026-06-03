@@ -748,6 +748,8 @@ export function App() {
             <textarea
               ref={textareaRef}
               spellCheck="true"
+              autoCorrect="off"
+              autoCapitalize="off"
               value={markdown}
               onChange={onTextChange}
               onClick={(event) => syncSelection(event.currentTarget)}
