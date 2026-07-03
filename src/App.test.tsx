@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
@@ -8,6 +8,7 @@ const fileMocks = vi.hoisted(() => ({
     const trimmed = name.trim() || "Untitled";
     return /\.(md|markdown|mdown|txt)$/i.test(trimmed) ? trimmed : `${trimmed}.md`;
   }),
+  menuEvent: "hilldown://menu",
   openedFilesEvent: "hilldown://open-files",
   openNativeMarkdownDocument: vi.fn(),
   openNativeMarkdownPath: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock("@tauri-apps/api/event", () => eventMocks);
 
 let lastDownloadName = "";
 let openedFilesHandler: ((event: { payload: string[] }) => void) | undefined;
+let menuHandler: ((event: { payload: string }) => void) | undefined;
 
 function sourceEditor() {
   return screen.getByRole("textbox", { name: /markdown source/i }) as HTMLTextAreaElement;
@@ -55,8 +57,13 @@ beforeEach(() => {
   fileMocks.saveNativeMarkdownDocument.mockResolvedValue(null);
   fileMocks.takePendingNativeOpenedFilePaths.mockResolvedValue([]);
   openedFilesHandler = undefined;
-  eventMocks.listen.mockImplementation((_event: string, handler: (event: { payload: string[] }) => void) => {
-    openedFilesHandler = handler;
+  menuHandler = undefined;
+  eventMocks.listen.mockImplementation((event: string, handler: (e: { payload: any }) => void) => {
+    if (event === "hilldown://menu") {
+      menuHandler = handler;
+    } else {
+      openedFilesHandler = handler;
+    }
     return Promise.resolve(vi.fn());
   });
 
@@ -153,7 +160,7 @@ describe("App", () => {
     expect(editor).toHaveValue("# Changed");
   });
 
-  it("handles keyboard shortcuts for save and formatting", async () => {
+  it("runs formatting and save-as from menu events in native mode", async () => {
     fileMocks.canUseNativeFileSystem.mockReturnValue(true);
     fileMocks.saveNativeMarkdownDocument.mockResolvedValue({
       name: "shortcut.md",
@@ -161,27 +168,27 @@ describe("App", () => {
     });
 
     render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
     const editor = replaceEditorValue("shortcut", 0, 8);
 
-    fireEvent.keyDown(editor, { key: "b", ctrlKey: true });
+    act(() => menuHandler?.({ payload: "bold" }));
     expect(editor).toHaveValue("**shortcut**");
 
     selectText(editor, 2, 10);
-    fireEvent.keyDown(editor, { key: "k", ctrlKey: true });
+    act(() => menuHandler?.({ payload: "link" }));
     expect(editor.value).toContain("[shortcut](https://example.com)");
 
-    fireEvent.keyDown(editor, { key: "s", ctrlKey: true, shiftKey: true });
+    act(() => menuHandler?.({ payload: "saveAs" }));
     await waitFor(() => expect(fileMocks.saveNativeMarkdownDocument).toHaveBeenCalledWith(
       expect.any(String),
       null,
       "Untitled document.md",
       true,
     ));
-
     expect(screen.getByText("Saved shortcut.md")).toBeInTheDocument();
   });
 
-  it("handles keyboard shortcuts for opening and italic formatting", async () => {
+  it("runs open and italic from menu events in native mode", async () => {
     fileMocks.canUseNativeFileSystem.mockReturnValue(true);
     fileMocks.openNativeMarkdownDocument.mockResolvedValue({
       contents: "# Keyboard open",
@@ -190,12 +197,13 @@ describe("App", () => {
     });
 
     render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
     const editor = replaceEditorValue("italic", 0, 6);
 
-    fireEvent.keyDown(editor, { key: "i", ctrlKey: true });
+    act(() => menuHandler?.({ payload: "italic" }));
     expect(editor).toHaveValue("_italic_");
 
-    fireEvent.keyDown(editor, { key: "o", ctrlKey: true });
+    act(() => menuHandler?.({ payload: "open" }));
     await waitFor(() => expect(sourceEditor()).toHaveValue("# Keyboard open"));
     expect(screen.getByText("Opened keyboard.md")).toBeInTheDocument();
   });
@@ -606,5 +614,43 @@ describe("App", () => {
 
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
+  });
+
+  it("keeps editor keyboard shortcuts in browser fallback mode", () => {
+    render(<App />);
+    const editor = replaceEditorValue("browser", 0, 7);
+
+    fireEvent.keyDown(editor, { key: "b", ctrlKey: true });
+
+    expect(editor).toHaveValue("**browser**");
+  });
+
+  it("does not run mod-key editor shortcuts in native mode (menu owns them)", () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    render(<App />);
+    const editor = replaceEditorValue("native", 0, 6);
+
+    fireEvent.keyDown(editor, { key: "b", ctrlKey: true });
+
+    expect(editor).toHaveValue("native");
+  });
+
+  it("ignores menu actions while the unsaved-changes dialog is open", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# Nope",
+      name: "nope.md",
+      path: "/tmp/nope.md",
+    });
+
+    render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
+    replaceEditorValue("# Dirty");
+    fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    menuHandler?.({ payload: "open" });
+
+    expect(fileMocks.openNativeMarkdownDocument).not.toHaveBeenCalled();
   });
 });

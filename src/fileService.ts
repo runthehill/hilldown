@@ -28,6 +28,7 @@ const htmlFilters = [
 ];
 
 export const openedFilesEvent = "hilldown://open-files";
+export const menuEvent = "hilldown://menu";
 
 export function canUseNativeFileSystem(): boolean {
   return isTauri();

@@ -48,6 +48,7 @@ import {
   ensureHtmlExtension,
   ensureMarkdownExtension,
   exportHtmlDocument,
+  menuEvent,
   openedFilesEvent,
   openNativeMarkdownDocument,
   openNativeMarkdownPath,
@@ -224,6 +225,8 @@ export function App() {
   const slashMenuRef = useRef<HTMLDivElement>(null);
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const saveCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const menuHandlerRef = useRef(handleMenuAction);
+  menuHandlerRef.current = handleMenuAction;
 
   const nativeFiles = canUseNativeFileSystem();
   const isDirty = isDocumentDirty(activeDoc);
@@ -473,6 +476,34 @@ export function App() {
     };
   }, [nativeFiles]);
 
+  useEffect(() => {
+    if (!nativeFiles) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    listen<string>(menuEvent, (event) => {
+      menuHandlerRef.current(event.payload);
+    })
+      .then((cleanup) => {
+        if (disposed) {
+          cleanup();
+          return;
+        }
+        unlisten = cleanup;
+      })
+      .catch(() => {
+        /* menu is a native nicety; ignore listen failures */
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [nativeFiles]);
+
   function resetDocument() {
     setSession((current) => addDocument(current, createEmptyDocument(crypto.randomUUID())));
     setStatus({ message: "New document", tone: "neutral" });
@@ -661,40 +692,44 @@ export function App() {
 
     const isMod = event.metaKey || event.ctrlKey;
 
-    if (isMod && event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      void saveDocument(event.shiftKey);
-      return;
-    }
+    if (!nativeFiles && isMod) {
+      const key = event.key.toLowerCase();
 
-    if (isMod && event.key.toLowerCase() === "o") {
-      event.preventDefault();
-      void openDocument();
-      return;
-    }
+      if (key === "s") {
+        event.preventDefault();
+        void saveDocument(event.shiftKey);
+        return;
+      }
 
-    if (isMod && event.key.toLowerCase() === "n") {
-      event.preventDefault();
-      resetDocument();
-      return;
-    }
+      if (key === "o") {
+        event.preventDefault();
+        void openDocument();
+        return;
+      }
 
-    if (isMod && event.key.toLowerCase() === "b") {
-      event.preventDefault();
-      runTool("bold");
-      return;
-    }
+      if (key === "n") {
+        event.preventDefault();
+        resetDocument();
+        return;
+      }
 
-    if (isMod && event.key.toLowerCase() === "i") {
-      event.preventDefault();
-      runTool("italic");
-      return;
-    }
+      if (key === "b") {
+        event.preventDefault();
+        runTool("bold");
+        return;
+      }
 
-    if (isMod && event.key.toLowerCase() === "k") {
-      event.preventDefault();
-      runTool("link");
-      return;
+      if (key === "i") {
+        event.preventDefault();
+        runTool("italic");
+        return;
+      }
+
+      if (key === "k") {
+        event.preventDefault();
+        runTool("link");
+        return;
+      }
     }
 
     if (slashQuery && visibleSlashCommands.length > 0) {
@@ -779,6 +814,51 @@ export function App() {
   async function copyHtml() {
     await navigator.clipboard.writeText(renderedHtml);
     setStatus({ message: "Copied HTML", tone: "success" });
+  }
+
+  function handleMenuAction(id: string) {
+    if (pendingCloseId) {
+      return; // the unsaved-changes dialog is modal; ignore menu commands until it's resolved
+    }
+    switch (id) {
+      case "new": return resetDocument();
+      case "open": return void openDocument();
+      case "save": return void saveDocument(false);
+      case "saveAs": return void saveDocument(true);
+      case "closeTab": return requestCloseTab(session.activeId);
+      case "exportHtml": return void exportHtml();
+      case "exportPdf":
+      case "print": return printDocument();
+      case "undo": return undo();
+      case "redo": return redo();
+      case "copyMarkdown": return void copyMarkdown();
+      case "copyHtml": return void copyHtml();
+      case "viewEdit": return setMode("edit");
+      case "viewSplit": return setMode("split");
+      case "viewPreview": return setMode("preview");
+      case "nextTab": return nextTab();
+      case "prevTab": return previousTab();
+      case "bold":
+      case "italic":
+      case "heading1":
+      case "heading2":
+      case "quote":
+      case "unordered":
+      case "ordered":
+      case "task":
+      case "code":
+      case "link":
+      case "table":
+      case "divider":
+        return runTool(id as ToolAction);
+      default:
+        if (id.startsWith("goToTab")) {
+          const index = Number(id.slice("goToTab".length)) - 1;
+          if (Number.isInteger(index)) {
+            goToTab(index);
+          }
+        }
+    }
   }
 
   function importMarkdown(event: ChangeEvent<HTMLInputElement>) {
