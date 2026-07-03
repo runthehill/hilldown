@@ -92,7 +92,9 @@ describe("App", () => {
   it("renders the editor, preview, and initial document metadata", () => {
     render(<App />);
 
-    expect(screen.getAllByText("HillDown")).toHaveLength(2);
+    expect(
+      screen.getAllByText("HillDown", { ignore: '[aria-hidden="true"], [aria-hidden="true"] *' }),
+    ).toHaveLength(2);
     expect(screen.getByRole("textbox", { name: /document title/i })).toHaveValue("Untitled document");
     expect(sourceEditor().value).toContain("# HillDown");
     expect(screen.getByRole("region", { name: /markdown preview/i })).toBeInTheDocument();
@@ -652,5 +654,50 @@ describe("App", () => {
     menuHandler?.({ payload: "open" });
 
     expect(fileMocks.openNativeMarkdownDocument).not.toHaveBeenCalled();
+  });
+
+  it("saves the pending document, not the active one, if a file opens while the close dialog is up", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.saveNativeMarkdownDocument.mockResolvedValue({ name: "a.md", path: "/tmp/a.md" });
+    fileMocks.takePendingNativeOpenedFilePaths
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(["/tmp/b.md"]);
+    fileMocks.openNativeMarkdownPath.mockResolvedValue({
+      contents: "# B contents",
+      name: "b.md",
+      path: "/tmp/b.md",
+    });
+
+    render(<App />);
+    await waitFor(() => expect(openedFilesHandler).toBeDefined());
+    replaceEditorValue("# Dirty A");
+
+    // open the unsaved-changes dialog for the dirty active doc (A)
+    fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    // an OS "open with" event arrives while the dialog is open -> adds & activates B
+    await act(async () => {
+      openedFilesHandler?.({ payload: ["/tmp/b.md"] });
+    });
+
+    // clicking Save in the dialog must save A (the pending doc), not the now-active B
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(fileMocks.saveNativeMarkdownDocument).toHaveBeenCalledWith(
+        "# Dirty A",
+        null,
+        "Untitled document.md",
+        false,
+      ),
+    );
+    // and B's content was never saved
+    expect(fileMocks.saveNativeMarkdownDocument).not.toHaveBeenCalledWith(
+      "# B contents",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });

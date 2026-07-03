@@ -68,9 +68,11 @@ import {
   pushDocumentHistory,
   redoDocument,
   replaceActive,
+  replaceDocumentById,
   setActive,
   closeDocument,
   undoDocument,
+  type EditorDocument,
   type EditorSession,
 } from "./documentSession";
 
@@ -218,7 +220,6 @@ export function App() {
     tone: "neutral",
   });
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
-  const [printing, setPrinting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorPaneRef = useRef<HTMLElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -299,17 +300,6 @@ export function App() {
       saveCloseButtonRef.current?.focus();
     }
   }, [pendingCloseId]);
-
-  useEffect(() => {
-    if (!printing) {
-      return;
-    }
-    const previousTitle = document.title;
-    document.title = title === untitledTitle ? appName : title;
-    window.print();
-    document.title = previousTitle;
-    setPrinting(false);
-  }, [printing]);
 
   function getSelection(): TextSelection {
     const textarea = textareaRef.current;
@@ -431,8 +421,8 @@ export function App() {
 
   async function flushPendingOpenedFiles() {
     try {
-      const [path] = await takePendingNativeOpenedFilePaths();
-      if (path) {
+      const paths = await takePendingNativeOpenedFilePaths();
+      for (const path of paths) {
         await openNativePath(path);
       }
     } catch (error) {
@@ -544,7 +534,7 @@ export function App() {
     if (!id) {
       return;
     }
-    const saved = await saveDocument(false);
+    const saved = await saveDocument(false, id);
     if (saved) {
       performCloseTab(id);
     }
@@ -644,19 +634,24 @@ export function App() {
     }
   }
 
-  async function saveDocument(forceSaveAs = false): Promise<boolean> {
+  async function saveDocument(forceSaveAs = false, targetId: string = session.activeId): Promise<boolean> {
+    const target = session.documents.find((doc) => doc.id === targetId);
+    if (!target) {
+      return false;
+    }
+
     if (!nativeFiles) {
-      downloadMarkdown();
-      setSession((current) => replaceActive(current, (doc) => ({ ...doc, lastSavedMarkdown: doc.markdown })));
+      downloadMarkdownFor(target);
+      setSession((current) => replaceDocumentById(current, targetId, (doc) => ({ ...doc, lastSavedMarkdown: doc.markdown })));
       setStatus({ message: "Downloaded Markdown", tone: "success" });
       return true;
     }
 
     try {
       const saved = await saveNativeMarkdownDocument(
-        markdown,
-        documentPath,
-        ensureMarkdownExtension(title),
+        target.markdown,
+        target.path,
+        ensureMarkdownExtension(target.title),
         forceSaveAs,
       );
 
@@ -666,7 +661,7 @@ export function App() {
       }
 
       setSession((current) =>
-        replaceActive(current, (doc) => ({
+        replaceDocumentById(current, targetId, (doc) => ({
           ...doc,
           path: saved.path,
           title: titleFromFileName(saved.name),
@@ -761,12 +756,12 @@ export function App() {
     }
   }
 
-  function downloadMarkdown() {
-    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  function downloadMarkdownFor(doc: EditorDocument) {
+    const blob = new Blob([doc.markdown], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = ensureMarkdownExtension(title === untitledTitle ? browserFileName : title);
+    link.download = ensureMarkdownExtension(doc.title === untitledTitle ? browserFileName : doc.title);
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -803,7 +798,10 @@ export function App() {
   }
 
   function printDocument() {
-    setPrinting(true);
+    const previousTitle = document.title;
+    document.title = title === untitledTitle ? appName : title;
+    window.print();
+    document.title = previousTitle;
   }
 
   async function copyMarkdown() {
@@ -1163,13 +1161,11 @@ export function App() {
         </div>
       )}
 
-      {printing && (
-        <article
-          className="markdown-preview print-only"
-          aria-hidden="true"
-          dangerouslySetInnerHTML={{ __html: renderedHtml }}
-        />
-      )}
+      <article
+        className="markdown-preview print-only"
+        aria-hidden="true"
+        dangerouslySetInnerHTML={{ __html: renderedHtml }}
+      />
     </div>
   );
 }

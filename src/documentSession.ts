@@ -72,6 +72,17 @@ export function replaceActive(
   };
 }
 
+export function replaceDocumentById(
+  session: EditorSession,
+  id: DocumentId,
+  updater: (doc: EditorDocument) => EditorDocument,
+): EditorSession {
+  return {
+    ...session,
+    documents: session.documents.map((doc) => (doc.id === id ? updater(doc) : doc)),
+  };
+}
+
 export function addDocument(session: EditorSession, document: EditorDocument): EditorSession {
   return { documents: [...session.documents, document], activeId: document.id };
 }

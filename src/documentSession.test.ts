@@ -11,6 +11,7 @@ import {
   pushDocumentHistory,
   redoDocument,
   replaceActive,
+  replaceDocumentById,
   setActive,
   undoDocument,
   type EditorDocument,
@@ -122,5 +123,20 @@ describe("documentSession", () => {
   it("detects dirty state", () => {
     const doc = pushDocumentHistory(documentFromFile("a", "saved", "t", "/p"), "edited");
     expect(isDocumentDirty(doc)).toBe(true);
+  });
+
+  it("replaceDocumentById updates only the identified document, active or not", () => {
+    let session = createSession(fresh("a"));
+    session = addDocument(session, fresh("b")); // active is b
+    const after = replaceDocumentById(session, "a", (doc) => ({ ...doc, markdown: "x" }));
+    expect(after.documents.find((d) => d.id === "a")?.markdown).toBe("x");
+    expect(after.documents.find((d) => d.id === "b")?.markdown).toBe(""); // untouched
+    expect(after.activeId).toBe("b"); // active unchanged
+  });
+
+  it("replaceDocumentById is a no-op for an unknown id", () => {
+    const session = createSession(fresh("a"));
+    const after = replaceDocumentById(session, "zzz", (doc) => ({ ...doc, markdown: "x" }));
+    expect(after.documents).toEqual(session.documents);
   });
 });
