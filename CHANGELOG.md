@@ -10,6 +10,7 @@ All notable changes to HillDown will be documented in this file.
 - A native application menu bar (File, Edit, Format, View, Window) with standard accelerators for New, Open, Save, Save As, Print, Close Tab, the formatting commands, the view modes, and tab navigation. Undo and Redo drive HillDown's own history.
 - Export the current document as a self-contained, styled HTML file.
 - Native printing (⌘/Ctrl+P) through the operating system print panel, including "Save as PDF" for PDF output.
+- Reopen recently opened or saved files from `File ▸ Open Recent` (desktop; remembers the last 10, with "Clear Recent").
 
 ### Fixed
 
