@@ -3,9 +3,13 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
 };
-use tauri::{Emitter, Manager};
+use tauri::{
+    menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+    Emitter, Manager,
+};
 
 const OPENED_FILES_EVENT: &str = "hilldown://open-files";
+const MENU_EVENT: &str = "hilldown://menu";
 
 #[derive(Default)]
 struct PendingOpenedFiles(Mutex<Vec<String>>);
@@ -57,6 +61,151 @@ fn disable_smart_substitutions() {
     }
 }
 
+/// Build the native application menu. Custom items carry stable ids that are
+/// emitted verbatim on `MENU_EVENT`; the frontend (see `App.tsx`) matches on
+/// those ids to dispatch the corresponding editor command. Predefined items
+/// (Cut/Copy/Paste/Select All, Minimize, Fullscreen, About, Hide/Quit) use
+/// Tauri's native, OS-provided behaviour. Undo/Redo are custom items because
+/// the app drives its own history model rather than the textarea's native
+/// undo stack.
+fn build_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    titles: &[String],
+    recent: &[String],
+) -> tauri::Result<tauri::menu::Menu<R>> {
+    let mut recent_menu = SubmenuBuilder::new(app, "Open Recent");
+    if recent.is_empty() {
+        recent_menu = recent_menu.item(
+            &MenuItemBuilder::with_id("noRecent", "No Recent Files")
+                .enabled(false)
+                .build(app)?,
+        );
+    } else {
+        for (index, name) in recent.iter().enumerate() {
+            let label = if name.trim().is_empty() {
+                "Untitled document"
+            } else {
+                name.as_str()
+            };
+            recent_menu = recent_menu
+                .item(&MenuItemBuilder::with_id(format!("openRecent{index}"), label).build(app)?);
+        }
+        recent_menu = recent_menu
+            .separator()
+            .item(&MenuItemBuilder::with_id("clearRecent", "Clear Recent").build(app)?);
+    }
+    let recent_menu = recent_menu.build()?;
+
+    #[cfg_attr(target_os = "macos", allow(unused_mut))]
+    let mut file = SubmenuBuilder::new(app, "File")
+        .item(&MenuItemBuilder::with_id("new", "New").accelerator("CmdOrCtrl+N").build(app)?)
+        .item(&MenuItemBuilder::with_id("open", "Open…").accelerator("CmdOrCtrl+O").build(app)?)
+        .item(&recent_menu)
+        .separator()
+        .item(&MenuItemBuilder::with_id("save", "Save").accelerator("CmdOrCtrl+S").build(app)?)
+        .item(&MenuItemBuilder::with_id("saveAs", "Save As…").accelerator("CmdOrCtrl+Shift+S").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::with_id("exportHtml", "Export as HTML…").build(app)?)
+        .item(&MenuItemBuilder::with_id("print", "Print…").accelerator("CmdOrCtrl+P").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::with_id("closeTab", "Close Tab").accelerator("CmdOrCtrl+W").build(app)?);
+
+    // macOS gets Quit via the application menu; give non-macOS platforms a
+    // menu-driven Quit/Exit in File so it isn't duplicated on macOS.
+    #[cfg(not(target_os = "macos"))]
+    {
+        file = file.separator().quit();
+    }
+
+    let file = file.build()?;
+
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .item(&MenuItemBuilder::with_id("undo", "Undo").accelerator("CmdOrCtrl+Z").build(app)?)
+        .item(&MenuItemBuilder::with_id("redo", "Redo").accelerator("CmdOrCtrl+Shift+Z").build(app)?)
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .separator()
+        .item(&MenuItemBuilder::with_id("copyMarkdown", "Copy as Markdown").build(app)?)
+        .item(&MenuItemBuilder::with_id("copyHtml", "Copy as HTML").build(app)?)
+        .build()?;
+
+    let format = SubmenuBuilder::new(app, "Format")
+        .item(&MenuItemBuilder::with_id("bold", "Bold").accelerator("CmdOrCtrl+B").build(app)?)
+        .item(&MenuItemBuilder::with_id("italic", "Italic").accelerator("CmdOrCtrl+I").build(app)?)
+        .item(&MenuItemBuilder::with_id("link", "Link").accelerator("CmdOrCtrl+K").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::with_id("heading1", "Heading 1").build(app)?)
+        .item(&MenuItemBuilder::with_id("heading2", "Heading 2").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::with_id("unordered", "Bulleted List").build(app)?)
+        .item(&MenuItemBuilder::with_id("ordered", "Numbered List").build(app)?)
+        .item(&MenuItemBuilder::with_id("task", "Task List").build(app)?)
+        .item(&MenuItemBuilder::with_id("quote", "Quote").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::with_id("code", "Code Block").build(app)?)
+        .item(&MenuItemBuilder::with_id("table", "Table").build(app)?)
+        .item(&MenuItemBuilder::with_id("divider", "Divider").build(app)?)
+        .build()?;
+
+    let view = SubmenuBuilder::new(app, "View")
+        .item(&MenuItemBuilder::with_id("viewEdit", "Editor Only").accelerator("CmdOrCtrl+Alt+1").build(app)?)
+        .item(&MenuItemBuilder::with_id("viewSplit", "Split").accelerator("CmdOrCtrl+Alt+2").build(app)?)
+        .item(&MenuItemBuilder::with_id("viewPreview", "Preview").accelerator("CmdOrCtrl+Alt+3").build(app)?)
+        .separator()
+        .fullscreen()
+        .build()?;
+
+    let mut window = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .separator()
+        .item(&MenuItemBuilder::with_id("nextTab", "Next Tab").accelerator("CmdOrCtrl+Alt+Right").build(app)?)
+        .item(&MenuItemBuilder::with_id("prevTab", "Previous Tab").accelerator("CmdOrCtrl+Alt+Left").build(app)?)
+        .separator();
+    for (index, tab_title) in titles.iter().enumerate() {
+        let position = index + 1; // 1-based; frontend parses Number(id.slice(7)) - 1
+        let label = if tab_title.trim().is_empty() {
+            format!("{position}. Untitled document")
+        } else {
+            format!("{position}. {tab_title}")
+        };
+        let mut item = MenuItemBuilder::with_id(format!("goToTab{position}"), label);
+        if position <= 9 {
+            item = item.accelerator(format!("CmdOrCtrl+{position}"));
+        }
+        window = window.item(&item.build(app)?);
+    }
+    let window = window.build()?;
+
+    let mut menu = MenuBuilder::new(app);
+
+    #[cfg(target_os = "macos")]
+    {
+        let app_menu = SubmenuBuilder::new(app, "HillDown")
+            .about(None)
+            .separator()
+            .hide()
+            .hide_others()
+            .show_all()
+            .separator()
+            .quit()
+            .build()?;
+        menu = menu.item(&app_menu);
+    }
+
+    menu = menu.item(&file).item(&edit).item(&format).item(&view).item(&window);
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let help = SubmenuBuilder::new(app, "Help").about(None).build()?;
+        menu = menu.item(&help);
+    }
+
+    menu.build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "macos")]
@@ -69,13 +218,25 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             read_markdown_document,
-            take_pending_opened_file_paths
+            take_pending_opened_file_paths,
+            print_document,
+            sync_menu
         ])
+        .on_menu_event(|app, event| {
+            let id = event.id().0.clone();
+            if let Err(error) = app.emit(MENU_EVENT, id) {
+                eprintln!("failed to emit menu event: {error}");
+            }
+        })
         .setup(|app| {
             let startup_paths = markdown_file_paths_from_args(std::env::args());
             if !startup_paths.is_empty() {
                 app.state::<PendingOpenedFiles>().push(startup_paths);
             }
+
+            let menu = build_menu(app.handle(), &["Untitled document".to_string()], &[])?;
+            app.set_menu(menu)?;
+
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -92,6 +253,36 @@ pub fn run() {
 #[tauri::command]
 fn take_pending_opened_file_paths(state: tauri::State<'_, PendingOpenedFiles>) -> Vec<String> {
     state.take()
+}
+
+/// Open the native macOS print panel for the current webview. Delegates to
+/// Tauri's `Webview::print()` -> wry's WKWebView print operation, which shows
+/// the system print / "Save as PDF" sheet. `window.print()` is a no-op in
+/// WKWebView, so the frontend calls this instead under Tauri.
+#[cfg(desktop)]
+#[tauri::command]
+fn print_document<R: tauri::Runtime>(webview: tauri::Webview<R>) -> Result<(), String> {
+    webview.print().map_err(|error| error.to_string())
+}
+
+/// Rebuild the native menu's Window submenu (open tabs) and File > Open
+/// Recent submenu. Menu operations must run on the main thread; commands are
+/// dispatched off it, so the rebuild + `set_menu` is scheduled via
+/// `run_on_main_thread`.
+#[tauri::command]
+fn sync_menu(app: tauri::AppHandle, titles: Vec<String>, recent: Vec<String>) -> Result<(), String> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        match build_menu(&handle, &titles, &recent) {
+            Ok(menu) => {
+                if let Err(error) = handle.set_menu(menu) {
+                    eprintln!("failed to set menu: {error}");
+                }
+            }
+            Err(error) => eprintln!("failed to rebuild menu: {error}"),
+        }
+    })
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

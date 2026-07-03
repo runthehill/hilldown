@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
@@ -8,10 +8,13 @@ const fileMocks = vi.hoisted(() => ({
     const trimmed = name.trim() || "Untitled";
     return /\.(md|markdown|mdown|txt)$/i.test(trimmed) ? trimmed : `${trimmed}.md`;
   }),
+  menuEvent: "hilldown://menu",
   openedFilesEvent: "hilldown://open-files",
   openNativeMarkdownDocument: vi.fn(),
   openNativeMarkdownPath: vi.fn(),
+  printNativeDocument: vi.fn(() => Promise.resolve()),
   saveNativeMarkdownDocument: vi.fn(),
+  syncMenu: vi.fn(() => Promise.resolve()),
   takePendingNativeOpenedFilePaths: vi.fn(),
   titleFromFileName: vi.fn((name: string) => {
     const base = name.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "Untitled document";
@@ -29,6 +32,7 @@ vi.mock("@tauri-apps/api/event", () => eventMocks);
 
 let lastDownloadName = "";
 let openedFilesHandler: ((event: { payload: string[] }) => void) | undefined;
+let menuHandler: ((event: { payload: string }) => void) | undefined;
 
 function sourceEditor() {
   return screen.getByRole("textbox", { name: /markdown source/i }) as HTMLTextAreaElement;
@@ -48,6 +52,7 @@ function replaceEditorValue(value: string, selectionStart = value.length, select
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear();
   lastDownloadName = "";
   fileMocks.canUseNativeFileSystem.mockReturnValue(false);
   fileMocks.openNativeMarkdownDocument.mockResolvedValue(null);
@@ -55,8 +60,13 @@ beforeEach(() => {
   fileMocks.saveNativeMarkdownDocument.mockResolvedValue(null);
   fileMocks.takePendingNativeOpenedFilePaths.mockResolvedValue([]);
   openedFilesHandler = undefined;
-  eventMocks.listen.mockImplementation((_event: string, handler: (event: { payload: string[] }) => void) => {
-    openedFilesHandler = handler;
+  menuHandler = undefined;
+  eventMocks.listen.mockImplementation((event: string, handler: (e: { payload: any }) => void) => {
+    if (event === "hilldown://menu") {
+      menuHandler = handler;
+    } else {
+      openedFilesHandler = handler;
+    }
     return Promise.resolve(vi.fn());
   });
 
@@ -85,7 +95,9 @@ describe("App", () => {
   it("renders the editor, preview, and initial document metadata", () => {
     render(<App />);
 
-    expect(screen.getAllByText("HillDown")).toHaveLength(2);
+    expect(
+      screen.getAllByText("HillDown", { ignore: '[aria-hidden="true"], [aria-hidden="true"] *' }),
+    ).toHaveLength(2);
     expect(screen.getByRole("textbox", { name: /document title/i })).toHaveValue("Untitled document");
     expect(sourceEditor().value).toContain("# HillDown");
     expect(screen.getByRole("region", { name: /markdown preview/i })).toBeInTheDocument();
@@ -118,6 +130,39 @@ describe("App", () => {
 
     expect(editor.value).toContain("# **HillDown**");
     expect(screen.getByText("Unsaved")).toBeInTheDocument();
+  });
+
+  it("shows 'Not saved' for a never-saved document and 'Saved' only after saving to a file", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.saveNativeMarkdownDocument.mockResolvedValue({ name: "note.md", path: "/tmp/note.md" });
+
+    render(<App />);
+
+    expect(screen.getByText("Not saved")).toBeInTheDocument();
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+    expect(screen.queryByText("Not saved")).not.toBeInTheDocument();
+  });
+
+  it("resets the footer status when a document is closed", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# Doc",
+      name: "doc.md",
+      path: "/tmp/doc.md",
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /open/i }));
+    await waitFor(() => expect(screen.getByText("Opened doc.md")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /^close doc$/i }));
+
+    await waitFor(() => expect(screen.queryByText("Opened doc.md")).not.toBeInTheDocument());
+    expect(screen.getByText("Ready")).toBeInTheDocument();
   });
 
   it.each([
@@ -153,7 +198,7 @@ describe("App", () => {
     expect(editor).toHaveValue("# Changed");
   });
 
-  it("handles keyboard shortcuts for save and formatting", async () => {
+  it("runs formatting and save-as from menu events in native mode", async () => {
     fileMocks.canUseNativeFileSystem.mockReturnValue(true);
     fileMocks.saveNativeMarkdownDocument.mockResolvedValue({
       name: "shortcut.md",
@@ -161,27 +206,27 @@ describe("App", () => {
     });
 
     render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
     const editor = replaceEditorValue("shortcut", 0, 8);
 
-    fireEvent.keyDown(editor, { key: "b", ctrlKey: true });
+    act(() => menuHandler?.({ payload: "bold" }));
     expect(editor).toHaveValue("**shortcut**");
 
     selectText(editor, 2, 10);
-    fireEvent.keyDown(editor, { key: "k", ctrlKey: true });
+    act(() => menuHandler?.({ payload: "link" }));
     expect(editor.value).toContain("[shortcut](https://example.com)");
 
-    fireEvent.keyDown(editor, { key: "s", ctrlKey: true, shiftKey: true });
+    act(() => menuHandler?.({ payload: "saveAs" }));
     await waitFor(() => expect(fileMocks.saveNativeMarkdownDocument).toHaveBeenCalledWith(
       expect.any(String),
       null,
       "Untitled document.md",
       true,
     ));
-
     expect(screen.getByText("Saved shortcut.md")).toBeInTheDocument();
   });
 
-  it("handles keyboard shortcuts for opening and italic formatting", async () => {
+  it("runs open and italic from menu events in native mode", async () => {
     fileMocks.canUseNativeFileSystem.mockReturnValue(true);
     fileMocks.openNativeMarkdownDocument.mockResolvedValue({
       contents: "# Keyboard open",
@@ -190,24 +235,166 @@ describe("App", () => {
     });
 
     render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
     const editor = replaceEditorValue("italic", 0, 6);
 
-    fireEvent.keyDown(editor, { key: "i", ctrlKey: true });
+    act(() => menuHandler?.({ payload: "italic" }));
     expect(editor).toHaveValue("_italic_");
 
-    fireEvent.keyDown(editor, { key: "o", ctrlKey: true });
+    act(() => menuHandler?.({ payload: "open" }));
     await waitFor(() => expect(sourceEditor()).toHaveValue("# Keyboard open"));
     expect(screen.getByText("Opened keyboard.md")).toBeInTheDocument();
   });
 
-  it("creates a new document from the keyboard after dirty confirmation", () => {
+  it("prints via the native command in the desktop app", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+
+    render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
+
+    await act(async () => {
+      menuHandler?.({ payload: "print" });
+    });
+
+    expect(fileMocks.printNativeDocument).toHaveBeenCalled();
+  });
+
+  it("falls back to 'Untitled document' in the tab close label when the title is cleared", () => {
+    render(<App />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: /document title/i }), { target: { value: "" } });
+
+    expect(screen.getByRole("button", { name: /close untitled document/i })).toBeInTheDocument();
+  });
+
+  it("falls back to 'Untitled document' in the unsaved-changes dialog when the title is cleared", () => {
+    render(<App />);
+    replaceEditorValue("# Dirty");
+    fireEvent.change(screen.getByRole("textbox", { name: /document title/i }), { target: { value: "" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(/changes you made to .Untitled document./i);
+  });
+
+  it("traps Tab focus within the unsaved-changes dialog", () => {
+    render(<App />);
+    replaceEditorValue("# Dirty");
+    fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+
+    const dialog = screen.getByRole("alertdialog");
+    screen.getByRole("button", { name: /^save$/i }).focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^cancel$/i }));
+  });
+
+  it("surfaces a status message when native print fails", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.printNativeDocument.mockRejectedValueOnce(new Error("no printer"));
+
+    render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
+
+    await act(async () => {
+      menuHandler?.({ payload: "print" });
+    });
+
+    expect(await screen.findByText("Print failed: no printer")).toBeInTheDocument();
+  });
+
+  it("syncs the native Window menu to the open tabs", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# Two",
+      name: "two.md",
+      path: "/tmp/two.md",
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /open/i }));
+    await waitFor(() => expect(sourceEditor()).toHaveValue("# Two"));
+
+    await waitFor(() =>
+      expect(fileMocks.syncMenu).toHaveBeenCalledWith(["Untitled document", "two"], ["two.md"]),
+    );
+  });
+
+  it("records an opened file in Open Recent and syncs it to the menu", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# R",
+      name: "recent.md",
+      path: "/tmp/recent.md",
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /open/i }));
+    await waitFor(() => expect(sourceEditor()).toHaveValue("# R"));
+
+    await waitFor(() =>
+      expect(fileMocks.syncMenu).toHaveBeenCalledWith(["Untitled document", "recent"], ["recent.md"]),
+    );
+  });
+
+  it("reopens a file from an openRecent menu event", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# First",
+      name: "first.md",
+      path: "/tmp/first.md",
+    });
+    fileMocks.openNativeMarkdownPath.mockResolvedValue({
+      contents: "# First",
+      name: "first.md",
+      path: "/tmp/first.md",
+    });
+
+    render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
+    fireEvent.click(screen.getByRole("button", { name: /open/i }));
+    await waitFor(() => expect(sourceEditor()).toHaveValue("# First"));
+
+    await act(async () => {
+      menuHandler?.({ payload: "openRecent0" });
+    });
+
+    await waitFor(() =>
+      expect(fileMocks.openNativeMarkdownPath).toHaveBeenCalledWith("/tmp/first.md"),
+    );
+  });
+
+  it("clears Open Recent on the clearRecent menu event", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# X",
+      name: "x.md",
+      path: "/tmp/x.md",
+    });
+
+    render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
+    fireEvent.click(screen.getByRole("button", { name: /open/i }));
+    await waitFor(() =>
+      expect(fileMocks.syncMenu).toHaveBeenCalledWith(expect.anything(), ["x.md"]),
+    );
+
+    fileMocks.syncMenu.mockClear();
+    await act(async () => {
+      menuHandler?.({ payload: "clearRecent" });
+    });
+
+    await waitFor(() => expect(fileMocks.syncMenu).toHaveBeenCalledWith(expect.anything(), []));
+  });
+
+  it("opens a new empty document in a new tab from the keyboard", () => {
     render(<App />);
     const editor = replaceEditorValue("# Dirty shortcut");
 
     fireEvent.keyDown(editor, { key: "n", ctrlKey: true });
 
-    expect(window.confirm).toHaveBeenCalledWith("Discard unsaved changes and create a new document?");
-    expect(editor).toHaveValue("");
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(sourceEditor()).toHaveValue("");
   });
 
   it("indents and outdents with Tab shortcuts", () => {
@@ -413,37 +600,42 @@ describe("App", () => {
     expect(screen.getByRole("textbox", { name: /document title/i })).toHaveValue("event-opened");
   });
 
-  it("keeps dirty content when a native opened file is rejected", async () => {
+  it("opens an event-emitted native file in a new tab even with unsaved changes", async () => {
     fileMocks.canUseNativeFileSystem.mockReturnValue(true);
     fileMocks.takePendingNativeOpenedFilePaths
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce(["/tmp/rejected.md"]);
-    vi.mocked(window.confirm).mockReturnValue(false);
+      .mockResolvedValueOnce(["/tmp/incoming.md"]);
+    fileMocks.openNativeMarkdownPath.mockResolvedValue({
+      contents: "# Incoming",
+      name: "incoming.md",
+      path: "/tmp/incoming.md",
+    });
 
     render(<App />);
-    const editor = replaceEditorValue("# Keep dirty");
+    replaceEditorValue("# Keep dirty");
     await waitFor(() => expect(eventMocks.listen).toHaveBeenCalled());
 
-    openedFilesHandler?.({ payload: ["/tmp/rejected.md"] });
+    openedFilesHandler?.({ payload: ["/tmp/incoming.md"] });
 
-    await waitFor(() => expect(fileMocks.takePendingNativeOpenedFilePaths).toHaveBeenCalledTimes(2));
-    expect(window.confirm).toHaveBeenCalledWith("Discard unsaved changes and open another document?");
-    expect(fileMocks.openNativeMarkdownPath).not.toHaveBeenCalled();
-    expect(editor).toHaveValue("# Keep dirty");
+    await waitFor(() => expect(sourceEditor()).toHaveValue("# Incoming"));
+    expect(window.confirm).not.toHaveBeenCalled();
   });
 
-  it("does not open another document when dirty changes are kept", async () => {
+  it("opens another document via the button even with unsaved changes", async () => {
     fileMocks.canUseNativeFileSystem.mockReturnValue(true);
-    vi.mocked(window.confirm).mockReturnValue(false);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# Fresh",
+      name: "fresh.md",
+      path: "/tmp/fresh.md",
+    });
 
     render(<App />);
-    const editor = replaceEditorValue("# Dirty");
+    replaceEditorValue("# Dirty");
 
     fireEvent.click(screen.getByRole("button", { name: /open/i }));
 
-    expect(window.confirm).toHaveBeenCalledWith("Discard unsaved changes and open another document?");
-    expect(fileMocks.openNativeMarkdownDocument).not.toHaveBeenCalled();
-    expect(editor).toHaveValue("# Dirty");
+    await waitFor(() => expect(sourceEditor()).toHaveValue("# Fresh"));
+    expect(window.confirm).not.toHaveBeenCalled();
   });
 
   it("shows native open cancel and error states", async () => {
@@ -538,15 +730,151 @@ describe("App", () => {
     expect(screen.getByText("Downloaded Markdown")).toBeInTheDocument();
   });
 
-  it("keeps dirty content when new document confirmation is rejected", () => {
-    vi.mocked(window.confirm).mockReturnValue(false);
+  it("adds a new empty document when New is clicked", () => {
+    render(<App />);
+    replaceEditorValue("# Keep me");
+
+    fireEvent.click(screen.getByRole("button", { name: /^new$/i }));
+
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(sourceEditor()).toHaveValue("");
+  });
+
+  describe("unsaved changes on close", () => {
+    it("prompts to save when closing a dirty tab instead of closing it", () => {
+      render(<App />);
+      replaceEditorValue("# Edited");
+
+      fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+
+      expect(screen.getByRole("alertdialog", { name: /unsaved changes/i })).toBeInTheDocument();
+      expect(sourceEditor()).toHaveValue("# Edited");
+      expect(window.confirm).not.toHaveBeenCalled();
+    });
+
+    it("discards and closes when Don't Save is chosen", () => {
+      render(<App />);
+      replaceEditorValue("# Edited");
+
+      fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+      fireEvent.click(screen.getByRole("button", { name: /don't save/i }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(sourceEditor()).toHaveValue("");
+    });
+
+    it("keeps the tab when the close is canceled", () => {
+      render(<App />);
+      replaceEditorValue("# Edited");
+
+      fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(sourceEditor()).toHaveValue("# Edited");
+    });
+
+    it("saves then closes when Save is chosen (browser download)", async () => {
+      render(<App />);
+      replaceEditorValue("# Edited");
+
+      fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() => expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+      expect(sourceEditor()).toHaveValue("");
+    });
+
+    it("closes a clean tab immediately without a dialog", () => {
+      render(<App />);
+
+      fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("keeps editor keyboard shortcuts in browser fallback mode", () => {
+    render(<App />);
+    const editor = replaceEditorValue("browser", 0, 7);
+
+    fireEvent.keyDown(editor, { key: "b", ctrlKey: true });
+
+    expect(editor).toHaveValue("**browser**");
+  });
+
+  it("does not run mod-key editor shortcuts in native mode (menu owns them)", () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    render(<App />);
+    const editor = replaceEditorValue("native", 0, 6);
+
+    fireEvent.keyDown(editor, { key: "b", ctrlKey: true });
+
+    expect(editor).toHaveValue("native");
+  });
+
+  it("ignores menu actions while the unsaved-changes dialog is open", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# Nope",
+      name: "nope.md",
+      path: "/tmp/nope.md",
+    });
 
     render(<App />);
-    const editor = replaceEditorValue("# Keep me");
+    await waitFor(() => expect(menuHandler).toBeDefined());
+    replaceEditorValue("# Dirty");
+    fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    menuHandler?.({ payload: "open" });
 
-    expect(window.confirm).toHaveBeenCalledWith("Discard unsaved changes and create a new document?");
-    expect(editor).toHaveValue("# Keep me");
+    expect(fileMocks.openNativeMarkdownDocument).not.toHaveBeenCalled();
+  });
+
+  it("saves the pending document, not the active one, if a file opens while the close dialog is up", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.saveNativeMarkdownDocument.mockResolvedValue({ name: "a.md", path: "/tmp/a.md" });
+    fileMocks.takePendingNativeOpenedFilePaths
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(["/tmp/b.md"]);
+    fileMocks.openNativeMarkdownPath.mockResolvedValue({
+      contents: "# B contents",
+      name: "b.md",
+      path: "/tmp/b.md",
+    });
+
+    render(<App />);
+    await waitFor(() => expect(openedFilesHandler).toBeDefined());
+    replaceEditorValue("# Dirty A");
+
+    // open the unsaved-changes dialog for the dirty active doc (A)
+    fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    // an OS "open with" event arrives while the dialog is open -> adds & activates B
+    await act(async () => {
+      openedFilesHandler?.({ payload: ["/tmp/b.md"] });
+    });
+
+    // clicking Save in the dialog must save A (the pending doc), not the now-active B
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(fileMocks.saveNativeMarkdownDocument).toHaveBeenCalledWith(
+        "# Dirty A",
+        null,
+        "Untitled document.md",
+        false,
+      ),
+    );
+    // and B's content was never saved
+    expect(fileMocks.saveNativeMarkdownDocument).not.toHaveBeenCalledWith(
+      "# B contents",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });

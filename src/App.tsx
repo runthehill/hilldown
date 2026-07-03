@@ -17,12 +17,14 @@ import {
   ListChecks,
   ListOrdered,
   PanelLeft,
+  Plus,
   Quote,
   Redo2,
   Rows3,
   Save,
   SeparatorHorizontal,
   Undo2,
+  X,
 } from "lucide-react";
 import { marked } from "marked";
 import { listen } from "@tauri-apps/api/event";
@@ -40,17 +42,42 @@ import {
   slashCommands,
   TextSelection,
 } from "./editorCommands";
+import { buildStandaloneHtml } from "./htmlExport";
+import { addRecent, loadRecentFiles, removeRecent, saveRecentFiles, type RecentFile } from "./recentFiles";
 import {
   canUseNativeFileSystem,
+  ensureHtmlExtension,
   ensureMarkdownExtension,
+  exportHtmlDocument,
+  menuEvent,
   openedFilesEvent,
   openNativeMarkdownDocument,
   openNativeMarkdownPath,
+  printNativeDocument,
   saveNativeMarkdownDocument,
+  syncMenu,
   takePendingNativeOpenedFilePaths,
   titleFromFileName,
 } from "./fileService";
 import { sampleDocument } from "./sampleDocument";
+import {
+  addDocument,
+  createEmptyDocument,
+  createSession,
+  documentFromFile,
+  getActive,
+  isDocumentDirty,
+  openDocumentInSession,
+  pushDocumentHistory,
+  redoDocument,
+  replaceActive,
+  replaceDocumentById,
+  setActive,
+  closeDocument,
+  undoDocument,
+  type EditorDocument,
+  type EditorSession,
+} from "./documentSession";
 
 type ViewMode = "edit" | "split" | "preview";
 type SaveTone = "neutral" | "success" | "error";
@@ -175,29 +202,42 @@ marked.use({
 });
 
 export function App() {
-  const [markdown, setMarkdown] = useState(sampleDocument);
-  const [title, setTitle] = useState(untitledTitle);
-  const [documentPath, setDocumentPath] = useState<string | null>(null);
-  const [lastSavedMarkdown, setLastSavedMarkdown] = useState(sampleDocument);
+  const [session, setSession] = useState<EditorSession>(() =>
+    createSession(documentFromFile(crypto.randomUUID(), sampleDocument, untitledTitle, null)),
+  );
+  const scrollPositionsRef = useRef<Map<string, number>>(new Map());
+
+  const activeDoc = getActive(session);
+  const markdown = activeDoc.markdown;
+  const title = activeDoc.title;
+  const documentPath = activeDoc.path;
+  const history = activeDoc.history;
+  const historyIndex = activeDoc.historyIndex;
+  const selection = activeDoc.selection;
+
   const [mode, setMode] = useState<ViewMode>("split");
   const [slashIndex, setSlashIndex] = useState(0);
-  const [history, setHistory] = useState<string[]>([sampleDocument]);
-  const [historyIndex, setHistoryIndex] = useState(0);
-  const [selection, setSelection] = useState<TextSelection>({ start: 0, end: 0 });
   const [slashMenuPosition, setSlashMenuPosition] = useState<MenuPosition>({ top: 22, left: 24 });
   const [status, setStatus] = useState<{ message: string; tone: SaveTone }>({
     message: "Ready",
     tone: "neutral",
   });
+  const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
+  const [recentFiles, setRecentFiles] = useState<RecentFile[]>(() => loadRecentFiles());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorPaneRef = useRef<HTMLElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const slashMenuRef = useRef<HTMLDivElement>(null);
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const isDirtyRef = useRef(false);
+  const saveCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const menuHandlerRef = useRef(handleMenuAction);
+  menuHandlerRef.current = handleMenuAction;
 
   const nativeFiles = canUseNativeFileSystem();
-  const isDirty = markdown !== lastSavedMarkdown;
+  const isDirty = isDocumentDirty(activeDoc);
+  const pendingCloseDoc = pendingCloseId
+    ? session.documents.find((doc) => doc.id === pendingCloseId) ?? null
+    : null;
 
   const renderedHtml = useMemo(() => {
     const raw = marked.parse(markdown) as string;
@@ -210,6 +250,15 @@ export function App() {
   }, [markdown]);
 
   const lineColumn = useMemo(() => getLineColumn(markdown, selection.end), [markdown, selection.end]);
+
+  const tabTitles = useMemo(
+    () => session.documents.map((doc) => doc.title || "Untitled document"),
+    [session.documents],
+  );
+  const tabMenuKey = tabTitles.join("\n");
+
+  const recentNames = useMemo(() => recentFiles.map((file) => file.name), [recentFiles]);
+  const recentKey = recentFiles.map((file) => `${file.name} ${file.path}`).join("\n");
 
   const slashQuery = useMemo(() => {
     if (selection.start !== selection.end) {
@@ -260,14 +309,10 @@ export function App() {
   }, [isDirty, title]);
 
   useEffect(() => {
-    isDirtyRef.current = isDirty;
-  }, [isDirty]);
-
-  function pushHistory(next: string) {
-    const nextHistory = [...history.slice(0, historyIndex + 1), next].slice(-80);
-    setHistory(nextHistory);
-    setHistoryIndex(nextHistory.length - 1);
-  }
+    if (pendingCloseId) {
+      saveCloseButtonRef.current?.focus();
+    }
+  }, [pendingCloseId]);
 
   function getSelection(): TextSelection {
     const textarea = textareaRef.current;
@@ -277,15 +322,16 @@ export function App() {
     };
   }
 
+  function updateActiveSelection(next: TextSelection) {
+    setSession((current) => replaceActive(current, (doc) => ({ ...doc, selection: next })));
+  }
+
   function syncSelection(target = textareaRef.current) {
     if (!target) {
       return;
     }
 
-    setSelection({
-      start: target.selectionStart,
-      end: target.selectionEnd,
-    });
+    updateActiveSelection({ start: target.selectionStart, end: target.selectionEnd });
   }
 
   function updateSlashMenuPosition() {
@@ -321,7 +367,7 @@ export function App() {
   }
 
   function focusSelection(selectionStart: number, selectionEnd = selectionStart) {
-    setSelection({ start: selectionStart, end: selectionEnd });
+    updateActiveSelection({ start: selectionStart, end: selectionEnd });
     window.requestAnimationFrame(() => {
       textareaRef.current?.focus();
       textareaRef.current?.setSelectionRange(selectionStart, selectionEnd);
@@ -329,49 +375,81 @@ export function App() {
   }
 
   function commit(next: string, selectionStart?: number, selectionEnd = selectionStart) {
-    setMarkdown(next);
-    pushHistory(next);
-
+    setSession((current) => replaceActive(current, (doc) => pushDocumentHistory(doc, next)));
     if (selectionStart !== undefined) {
       focusSelection(selectionStart, selectionEnd);
     }
   }
 
-  function loadDocument(contents: string, name: string, path: string | null) {
-    setMarkdown(contents);
-    setHistory([contents]);
-    setHistoryIndex(0);
-    setLastSavedMarkdown(contents);
-    setTitle(titleFromFileName(name));
-    setDocumentPath(path);
-    setStatus({ message: `Opened ${name}`, tone: "success" });
-    focusSelection(0, 0);
+  function renameActive(nextTitle: string) {
+    setSession((current) => replaceActive(current, (doc) => ({ ...doc, title: nextTitle })));
   }
 
-  async function openNativePath(path: string) {
-    if (isDirtyRef.current && !window.confirm("Discard unsaved changes and open another document?")) {
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
       return;
     }
+    textarea.setSelectionRange(activeDoc.selection.start, activeDoc.selection.end);
+    if (!pendingCloseId) {
+      textarea.focus();
+    }
+    const remembered = scrollPositionsRef.current.get(session.activeId) ?? 0;
+    textarea.scrollTop = remembered;
+    textarea.scrollLeft = 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.activeId, mode]);
 
+  function onEditorScroll() {
+    updateSlashMenuPosition();
+    const textarea = textareaRef.current;
+    if (textarea) {
+      scrollPositionsRef.current.set(session.activeId, textarea.scrollTop);
+    }
+  }
+
+  function rememberRecent(path: string, name: string) {
+    setRecentFiles((list) => addRecent(list, { path, name }));
+  }
+
+  useEffect(() => {
+    saveRecentFiles(recentFiles);
+  }, [recentFiles]);
+
+  function loadDocument(contents: string, name: string, path: string | null) {
+    setSession((current) =>
+      openDocumentInSession(
+        current,
+        documentFromFile(crypto.randomUUID(), contents, titleFromFileName(name), path),
+      ),
+    );
+    setStatus({ message: `Opened ${name}`, tone: "success" });
+    if (path) {
+      rememberRecent(path, name);
+    }
+  }
+
+  async function openNativePath(path: string): Promise<boolean> {
     try {
       const opened = await openNativeMarkdownPath(path);
       if (!opened) {
-        return;
+        return false;
       }
-
       loadDocument(opened.contents, opened.name, opened.path);
+      return true;
     } catch (error) {
       setStatus({
         message: `Open failed: ${error instanceof Error ? error.message : String(error)}`,
         tone: "error",
       });
+      return false;
     }
   }
 
   async function flushPendingOpenedFiles() {
     try {
-      const [path] = await takePendingNativeOpenedFilePaths();
-      if (path) {
+      const paths = await takePendingNativeOpenedFilePaths();
+      for (const path of paths) {
         await openNativePath(path);
       }
     } catch (error) {
@@ -415,20 +493,134 @@ export function App() {
     };
   }, [nativeFiles]);
 
-  function resetDocument() {
-    if (isDirty && !window.confirm("Discard unsaved changes and create a new document?")) {
+  useEffect(() => {
+    if (!nativeFiles) {
       return;
     }
 
-    const contents = "";
-    setMarkdown(contents);
-    setHistory([contents]);
-    setHistoryIndex(0);
-    setLastSavedMarkdown(contents);
-    setTitle(untitledTitle);
-    setDocumentPath(null);
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    listen<string>(menuEvent, (event) => {
+      menuHandlerRef.current(event.payload);
+    })
+      .then((cleanup) => {
+        if (disposed) {
+          cleanup();
+          return;
+        }
+        unlisten = cleanup;
+      })
+      .catch(() => {
+        /* menu is a native nicety; ignore listen failures */
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [nativeFiles]);
+
+  useEffect(() => {
+    if (!nativeFiles) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void syncMenu(tabTitles, recentNames).catch(() => {
+        /* the native menu is a nicety; ignore sync failures */
+      });
+    }, 150);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nativeFiles, tabMenuKey, recentKey]);
+
+  function resetDocument() {
+    setSession((current) => addDocument(current, createEmptyDocument(crypto.randomUUID())));
     setStatus({ message: "New document", tone: "neutral" });
-    focusSelection(0, 0);
+  }
+
+  function selectTab(id: string) {
+    setSession((current) => setActive(current, id));
+  }
+
+  function requestCloseTab(id: string) {
+    const target = session.documents.find((doc) => doc.id === id);
+    if (target && isDocumentDirty(target)) {
+      setSession((current) => setActive(current, id));
+      setPendingCloseId(id);
+      return;
+    }
+    performCloseTab(id);
+  }
+
+  function performCloseTab(id: string) {
+    scrollPositionsRef.current.delete(id);
+    setSession((current) => closeDocument(current, id, () => createEmptyDocument(crypto.randomUUID())));
+    // The status line reflects the last action ("Opened X", "Saved X", …); once
+    // that document is gone, reset it so a stale message doesn't outlive the tab.
+    setStatus({ message: "Ready", tone: "neutral" });
+  }
+
+  function cancelPendingClose() {
+    setPendingCloseId(null);
+  }
+
+  function discardPendingClose() {
+    if (pendingCloseId) {
+      performCloseTab(pendingCloseId);
+    }
+    setPendingCloseId(null);
+  }
+
+  async function savePendingClose() {
+    const id = pendingCloseId;
+    if (!id) {
+      return;
+    }
+    const saved = await saveDocument(false, id);
+    if (saved) {
+      performCloseTab(id);
+    }
+    setPendingCloseId(null);
+  }
+
+  function goToTab(index: number) {
+    const target = session.documents[index];
+    if (target) {
+      selectTab(target.id);
+    }
+  }
+
+  async function openRecentByIndex(index: number) {
+    const entry = recentFiles[index];
+    if (!entry) {
+      return;
+    }
+    const opened = await openNativePath(entry.path);
+    if (!opened) {
+      setRecentFiles((list) => removeRecent(list, entry.path));
+    }
+  }
+
+  function clearRecentFiles() {
+    setRecentFiles([]);
+  }
+
+  function shiftTab(delta: number) {
+    const index = session.documents.findIndex((doc) => doc.id === session.activeId);
+    const count = session.documents.length;
+    const next = session.documents[(index + delta + count) % count];
+    if (next) {
+      selectTab(next.id);
+    }
+  }
+
+  function nextTab() {
+    shiftTab(1);
+  }
+
+  function previousTab() {
+    shiftTab(-1);
   }
 
   function runTool(action: ToolAction) {
@@ -454,28 +646,19 @@ export function App() {
   }
 
   function undo() {
-    if (historyIndex <= 0) {
-      return;
-    }
-    const nextIndex = historyIndex - 1;
-    setHistoryIndex(nextIndex);
-    setMarkdown(history[nextIndex]);
+    setSession((current) => replaceActive(current, undoDocument));
   }
 
   function redo() {
-    if (historyIndex >= history.length - 1) {
-      return;
-    }
-    const nextIndex = historyIndex + 1;
-    setHistoryIndex(nextIndex);
-    setMarkdown(history[nextIndex]);
+    setSession((current) => replaceActive(current, redoDocument));
   }
 
   function onTextChange(event: ChangeEvent<HTMLTextAreaElement>) {
     const next = event.target.value;
-    setMarkdown(next);
-    pushHistory(next);
-    syncSelection(event.target);
+    const nextSelection = { start: event.target.selectionStart, end: event.target.selectionEnd };
+    setSession((current) =>
+      replaceActive(current, (doc) => ({ ...pushDocumentHistory(doc, next), selection: nextSelection })),
+    );
   }
 
   function chooseSlashCommand(index: number) {
@@ -488,10 +671,6 @@ export function App() {
   }
 
   async function openDocument() {
-    if (isDirty && !window.confirm("Discard unsaved changes and open another document?")) {
-      return;
-    }
-
     if (!nativeFiles) {
       fileInputRef.current?.click();
       return;
@@ -513,76 +692,100 @@ export function App() {
     }
   }
 
-  async function saveDocument(forceSaveAs = false) {
+  async function saveDocument(forceSaveAs = false, targetId: string = session.activeId): Promise<boolean> {
+    const target = session.documents.find((doc) => doc.id === targetId);
+    if (!target) {
+      return false;
+    }
+
     if (!nativeFiles) {
-      downloadMarkdown();
-      setLastSavedMarkdown(markdown);
+      downloadMarkdownFor(target);
+      setSession((current) => replaceDocumentById(current, targetId, (doc) => ({ ...doc, lastSavedMarkdown: doc.markdown })));
       setStatus({ message: "Downloaded Markdown", tone: "success" });
-      return;
+      return true;
     }
 
     try {
       const saved = await saveNativeMarkdownDocument(
-        markdown,
-        documentPath,
-        ensureMarkdownExtension(title),
+        target.markdown,
+        target.path,
+        ensureMarkdownExtension(target.title),
         forceSaveAs,
       );
 
       if (!saved) {
         setStatus({ message: "Save canceled", tone: "neutral" });
-        return;
+        return false;
       }
 
-      setDocumentPath(saved.path);
-      setTitle(titleFromFileName(saved.name));
-      setLastSavedMarkdown(markdown);
+      setSession((current) =>
+        replaceDocumentById(current, targetId, (doc) => ({
+          ...doc,
+          path: saved.path,
+          title: titleFromFileName(saved.name),
+          lastSavedMarkdown: doc.markdown,
+        })),
+      );
+      if (saved.path) {
+        rememberRecent(saved.path, saved.name);
+      }
       setStatus({ message: `Saved ${saved.name}`, tone: "success" });
+      return true;
     } catch (error) {
       setStatus({
         message: `Save failed: ${error instanceof Error ? error.message : String(error)}`,
         tone: "error",
       });
+      return false;
     }
   }
 
   function onEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (pendingCloseId) {
+      event.preventDefault();
+      return;
+    }
+
     const isMod = event.metaKey || event.ctrlKey;
 
-    if (isMod && event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      void saveDocument(event.shiftKey);
-      return;
-    }
+    if (!nativeFiles && isMod) {
+      const key = event.key.toLowerCase();
 
-    if (isMod && event.key.toLowerCase() === "o") {
-      event.preventDefault();
-      void openDocument();
-      return;
-    }
+      if (key === "s") {
+        event.preventDefault();
+        void saveDocument(event.shiftKey);
+        return;
+      }
 
-    if (isMod && event.key.toLowerCase() === "n") {
-      event.preventDefault();
-      resetDocument();
-      return;
-    }
+      if (key === "o") {
+        event.preventDefault();
+        void openDocument();
+        return;
+      }
 
-    if (isMod && event.key.toLowerCase() === "b") {
-      event.preventDefault();
-      runTool("bold");
-      return;
-    }
+      if (key === "n") {
+        event.preventDefault();
+        resetDocument();
+        return;
+      }
 
-    if (isMod && event.key.toLowerCase() === "i") {
-      event.preventDefault();
-      runTool("italic");
-      return;
-    }
+      if (key === "b") {
+        event.preventDefault();
+        runTool("bold");
+        return;
+      }
 
-    if (isMod && event.key.toLowerCase() === "k") {
-      event.preventDefault();
-      runTool("link");
-      return;
+      if (key === "i") {
+        event.preventDefault();
+        runTool("italic");
+        return;
+      }
+
+      if (key === "k") {
+        event.preventDefault();
+        runTool("link");
+        return;
+      }
     }
 
     if (slashQuery && visibleSlashCommands.length > 0) {
@@ -614,14 +817,64 @@ export function App() {
     }
   }
 
-  function downloadMarkdown() {
-    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  function downloadMarkdownFor(doc: EditorDocument) {
+    const blob = new Blob([doc.markdown], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = ensureMarkdownExtension(title === untitledTitle ? browserFileName : title);
+    link.download = ensureMarkdownExtension(doc.title === untitledTitle ? browserFileName : doc.title);
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function exportHtml() {
+    const html = buildStandaloneHtml(title, renderedHtml);
+    const suggested = ensureHtmlExtension(title === untitledTitle ? "hilldown" : title);
+
+    if (!nativeFiles) {
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = suggested;
+      link.click();
+      URL.revokeObjectURL(url);
+      setStatus({ message: "Exported HTML", tone: "success" });
+      return;
+    }
+
+    try {
+      const saved = await exportHtmlDocument(html, suggested);
+      if (!saved) {
+        setStatus({ message: "Export canceled", tone: "neutral" });
+        return;
+      }
+      setStatus({ message: `Exported ${saved.name}`, tone: "success" });
+    } catch (error) {
+      setStatus({
+        message: `Export failed: ${error instanceof Error ? error.message : String(error)}`,
+        tone: "error",
+      });
+    }
+  }
+
+  async function printDocument() {
+    const previousTitle = document.title;
+    document.title = title === untitledTitle ? appName : title;
+    try {
+      if (nativeFiles) {
+        await printNativeDocument();
+      } else {
+        window.print();
+      }
+    } catch (error) {
+      setStatus({
+        message: `Print failed: ${error instanceof Error ? error.message : String(error)}`,
+        tone: "error",
+      });
+    } finally {
+      document.title = previousTitle;
+    }
   }
 
   async function copyMarkdown() {
@@ -632,6 +885,56 @@ export function App() {
   async function copyHtml() {
     await navigator.clipboard.writeText(renderedHtml);
     setStatus({ message: "Copied HTML", tone: "success" });
+  }
+
+  function handleMenuAction(id: string) {
+    if (pendingCloseId) {
+      return; // the unsaved-changes dialog is modal; ignore menu commands until it's resolved
+    }
+    switch (id) {
+      case "new": return resetDocument();
+      case "open": return void openDocument();
+      case "save": return void saveDocument(false);
+      case "saveAs": return void saveDocument(true);
+      case "closeTab": return requestCloseTab(session.activeId);
+      case "exportHtml": return void exportHtml();
+      case "print": return void printDocument();
+      case "undo": return undo();
+      case "redo": return redo();
+      case "copyMarkdown": return void copyMarkdown();
+      case "copyHtml": return void copyHtml();
+      case "viewEdit": return setMode("edit");
+      case "viewSplit": return setMode("split");
+      case "viewPreview": return setMode("preview");
+      case "nextTab": return nextTab();
+      case "prevTab": return previousTab();
+      case "clearRecent": return clearRecentFiles();
+      case "bold":
+      case "italic":
+      case "heading1":
+      case "heading2":
+      case "quote":
+      case "unordered":
+      case "ordered":
+      case "task":
+      case "code":
+      case "link":
+      case "table":
+      case "divider":
+        return runTool(id as ToolAction);
+      default:
+        if (id.startsWith("openRecent")) {
+          const index = Number(id.slice("openRecent".length));
+          if (Number.isInteger(index)) {
+            void openRecentByIndex(index);
+          }
+        } else if (id.startsWith("goToTab")) {
+          const index = Number(id.slice("goToTab".length)) - 1;
+          if (Number.isInteger(index)) {
+            goToTab(index);
+          }
+        }
+    }
   }
 
   function importMarkdown(event: ChangeEvent<HTMLInputElement>) {
@@ -650,6 +953,11 @@ export function App() {
   const editorVisible = mode === "edit" || mode === "split";
   const previewVisible = mode === "preview" || mode === "split";
   const pathLabel = documentPath ?? (nativeFiles ? "No file selected" : "Browser fallback mode");
+  const saveState = isDirty
+    ? { className: "dirty", label: "Unsaved" }
+    : documentPath
+      ? { className: "clean", label: "Saved" }
+      : { className: "new", label: "Not saved" };
   const slashMenuOpen = slashQuery !== null && visibleSlashCommands.length > 0;
   const activeSlashOptionId =
     slashMenuOpen && visibleSlashCommands[slashIndex]
@@ -658,7 +966,11 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
+      <header
+        className="topbar"
+        aria-hidden={pendingCloseDoc ? true : undefined}
+        inert={pendingCloseDoc ? true : undefined}
+      >
         <div className="document-title">
           <div className="brand-mark" aria-hidden="true">H</div>
           <div>
@@ -666,11 +978,11 @@ export function App() {
             <input
               aria-label="Document title"
               value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              onChange={(event) => renameActive(event.target.value)}
             />
             <p className="document-path" title={pathLabel}>
-              <span className={`save-state ${isDirty ? "dirty" : "clean"}`}>
-                {isDirty ? "Unsaved" : "Saved"}
+              <span className={`save-state ${saveState.className}`}>
+                {saveState.label}
               </span>
               <span>{pathLabel}</span>
             </p>
@@ -709,7 +1021,66 @@ export function App() {
         </div>
       </header>
 
-      <section className="toolbar" role="toolbar" aria-label="Formatting toolbar">
+      <nav
+        className="tab-strip"
+        role="tablist"
+        aria-label="Open documents"
+        aria-hidden={pendingCloseDoc ? true : undefined}
+        inert={pendingCloseDoc ? true : undefined}
+      >
+        {session.documents.map((doc) => {
+          const dirty = isDocumentDirty(doc);
+          const active = doc.id === session.activeId;
+          return (
+            <div
+              key={doc.id}
+              role="tab"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              className={`tab ${active ? "active" : ""}`}
+              title={doc.path ?? doc.title}
+              onClick={() => selectTab(doc.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  selectTab(doc.id);
+                }
+              }}
+              onAuxClick={(event) => {
+                if (event.button === 1) {
+                  event.preventDefault();
+                  requestCloseTab(doc.id);
+                }
+              }}
+            >
+              <span className="tab-title">{doc.title || "Untitled document"}</span>
+              {dirty && <span className="tab-dirty" aria-label="Unsaved changes">●</span>}
+              <button
+                type="button"
+                className="tab-close"
+                aria-label={`Close ${doc.title || "Untitled document"}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  requestCloseTab(doc.id);
+                }}
+              >
+                <X size={13} />
+              </button>
+            </div>
+          );
+        })}
+        <button type="button" className="tab-new" aria-label="New tab" title="New tab" onClick={resetDocument}>
+          <Plus size={15} />
+        </button>
+      </nav>
+
+      <section
+        className="toolbar"
+        role="toolbar"
+        aria-label="Formatting toolbar"
+        aria-hidden={pendingCloseDoc ? true : undefined}
+        inert={pendingCloseDoc ? true : undefined}
+      >
         <div className="history-controls">
           <button className="icon-button" onClick={undo} disabled={historyIndex === 0} title="Undo" aria-label="Undo">
             <Undo2 size={17} />
@@ -755,7 +1126,7 @@ export function App() {
               onClick={(event) => syncSelection(event.currentTarget)}
               onKeyDown={onEditorKeyDown}
               onKeyUp={(event) => syncSelection(event.currentTarget)}
-              onScroll={updateSlashMenuPosition}
+              onScroll={onEditorScroll}
               onSelect={(event) => syncSelection(event.currentTarget)}
               aria-label="Markdown source"
               aria-controls={slashMenuOpen ? slashMenuListboxId : undefined}
@@ -808,7 +1179,11 @@ export function App() {
         )}
       </main>
 
-      <footer className="statusbar">
+      <footer
+        className="statusbar"
+        aria-hidden={pendingCloseDoc ? true : undefined}
+        inert={pendingCloseDoc ? true : undefined}
+      >
         <span>{wordCount} words</span>
         <span>{markdown.length} characters</span>
         <span>
@@ -827,6 +1202,71 @@ export function App() {
           </button>
         </div>
       </footer>
+
+      {pendingCloseDoc && (
+        <div className="modal-overlay" role="presentation" onClick={cancelPendingClose}>
+          <div
+            className="modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="unsaved-changes-title"
+            aria-describedby="unsaved-changes-desc"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                cancelPendingClose();
+                return;
+              }
+              if (event.key === "Tab") {
+                const buttons = Array.from(
+                  event.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
+                );
+                if (buttons.length === 0) {
+                  return;
+                }
+                event.preventDefault();
+                const index = buttons.findIndex((button) => button === document.activeElement);
+                const nextIndex =
+                  index === -1
+                    ? event.shiftKey
+                      ? buttons.length - 1
+                      : 0
+                    : (index + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length;
+                buttons[nextIndex].focus();
+              }
+            }}
+          >
+            <h2 id="unsaved-changes-title">Unsaved changes</h2>
+            <p id="unsaved-changes-desc">
+              Do you want to save the changes you made to “{pendingCloseDoc.title || "Untitled document"}”? Your changes will be
+              lost if you don’t save them.
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="text-button" onClick={cancelPendingClose}>
+                Cancel
+              </button>
+              <button type="button" className="text-button danger" onClick={discardPendingClose}>
+                Don't Save
+              </button>
+              <button
+                type="button"
+                className="text-button primary"
+                ref={saveCloseButtonRef}
+                onClick={() => void savePendingClose()}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <article
+        className="markdown-preview print-only"
+        aria-hidden="true"
+        dangerouslySetInnerHTML={{ __html: renderedHtml }}
+      />
     </div>
   );
 }

@@ -2,6 +2,24 @@
 
 All notable changes to HillDown will be documented in this file.
 
+## 0.4.0 - 2026-07-03
+
+### Added
+
+- Open multiple documents at once in in-window tabs, with a per-tab unsaved indicator and close via ✕ or middle-click. Closing a tab with unsaved changes now shows a Save / Don't Save / Cancel dialog. Opening a file that is already open activates its tab instead of duplicating it, and opening a file no longer replaces the current document.
+- A native application menu bar (File, Edit, Format, View, Window) with standard accelerators for New, Open, Save, Save As, Print, Close Tab, the formatting commands, the view modes, and tab navigation. Undo and Redo drive HillDown's own history.
+- Export the current document as a self-contained, styled HTML file.
+- Native printing (⌘/Ctrl+P) through the operating system print panel, including "Save as PDF" for PDF output.
+- Reopen recently opened or saved files from `File ▸ Open Recent` (desktop; remembers the last 10, with "Clear Recent").
+
+### Fixed
+
+- A newly opened document now starts scrolled to the top instead of jumping to the end, and each tab remembers its own scroll position.
+
+### Changed
+
+- Bump app version from `0.3.1` to `0.4.0`.
+
 ## 0.3.1 - 2026-06-03
 
 ### Fixed

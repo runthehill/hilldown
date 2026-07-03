@@ -20,7 +20,15 @@ const markdownFilters = [
   },
 ];
 
+const htmlFilters = [
+  {
+    name: "HTML",
+    extensions: ["html", "htm"],
+  },
+];
+
 export const openedFilesEvent = "hilldown://open-files";
+export const menuEvent = "hilldown://menu";
 
 export function canUseNativeFileSystem(): boolean {
   return isTauri();
@@ -35,6 +43,11 @@ export function basenameFromPath(path: string): string {
 export function ensureMarkdownExtension(name: string): string {
   const trimmed = name.trim() || "Untitled";
   return /\.(md|markdown|mdown|txt)$/i.test(trimmed) ? trimmed : `${trimmed}.md`;
+}
+
+export function ensureHtmlExtension(name: string): string {
+  const trimmed = name.trim() || "Untitled";
+  return /\.html?$/i.test(trimmed) ? trimmed : `${trimmed}.html`;
 }
 
 export function titleFromFileName(name: string): string {
@@ -81,6 +94,20 @@ export async function takePendingNativeOpenedFilePaths(): Promise<string[]> {
   return invoke<string[]>("take_pending_opened_file_paths");
 }
 
+export async function printNativeDocument(): Promise<void> {
+  if (!canUseNativeFileSystem()) {
+    return;
+  }
+  await invoke("print_document");
+}
+
+export async function syncMenu(titles: string[], recent: string[]): Promise<void> {
+  if (!canUseNativeFileSystem()) {
+    return; // browser fallback has no native menu
+  }
+  await invoke("sync_menu", { titles, recent });
+}
+
 export async function saveNativeMarkdownDocument(
   contents: string,
   currentPath: string | null,
@@ -105,6 +132,33 @@ export async function saveNativeMarkdownDocument(
   }
 
   await writeTextFile(targetPath, contents);
+
+  return {
+    name: basenameFromPath(targetPath),
+    path: targetPath,
+  };
+}
+
+export async function exportHtmlDocument(
+  html: string,
+  suggestedName: string,
+): Promise<SavedDocument | null> {
+  if (!canUseNativeFileSystem()) {
+    return null;
+  }
+
+  const targetPath = await save({
+    title: "Export as HTML",
+    defaultPath: ensureHtmlExtension(suggestedName),
+    filters: htmlFilters,
+    canCreateDirectories: true,
+  });
+
+  if (!targetPath) {
+    return null;
+  }
+
+  await writeTextFile(targetPath, html);
 
   return {
     name: basenameFromPath(targetPath),
