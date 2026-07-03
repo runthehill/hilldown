@@ -1006,6 +1006,47 @@ textarea::-webkit-scrollbar-track {
   }
 }
 
+/* ---- Print / PDF ------------------------------------------------------- */
+
+.print-only {
+  display: none;
+}
+
+@media print {
+  .topbar,
+  .tab-strip,
+  .toolbar,
+  .editor-pane,
+  .preview-pane,
+  .statusbar,
+  .slash-menu,
+  .modal-overlay {
+    display: none !important;
+  }
+
+  .app-shell {
+    display: block;
+    background: #fff;
+  }
+
+  .app-shell::after {
+    display: none;
+  }
+
+  .workspace {
+    display: block;
+    background: #fff;
+  }
+
+  .print-only {
+    display: block;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    color: #000;
+  }
+}
+
 /* Windows High Contrast / forced colors: keep focus and stateful controls
    distinguishable once custom backgrounds are flattened to the system palette. */
 @media (forced-colors: active) {

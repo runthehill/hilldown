@@ -20,6 +20,13 @@ const markdownFilters = [
   },
 ];
 
+const htmlFilters = [
+  {
+    name: "HTML",
+    extensions: ["html", "htm"],
+  },
+];
+
 export const openedFilesEvent = "hilldown://open-files";
 
 export function canUseNativeFileSystem(): boolean {
@@ -35,6 +42,11 @@ export function basenameFromPath(path: string): string {
 export function ensureMarkdownExtension(name: string): string {
   const trimmed = name.trim() || "Untitled";
   return /\.(md|markdown|mdown|txt)$/i.test(trimmed) ? trimmed : `${trimmed}.md`;
+}
+
+export function ensureHtmlExtension(name: string): string {
+  const trimmed = name.trim() || "Untitled";
+  return /\.html?$/i.test(trimmed) ? trimmed : `${trimmed}.html`;
 }
 
 export function titleFromFileName(name: string): string {
@@ -105,6 +117,33 @@ export async function saveNativeMarkdownDocument(
   }
 
   await writeTextFile(targetPath, contents);
+
+  return {
+    name: basenameFromPath(targetPath),
+    path: targetPath,
+  };
+}
+
+export async function exportHtmlDocument(
+  html: string,
+  suggestedName: string,
+): Promise<SavedDocument | null> {
+  if (!canUseNativeFileSystem()) {
+    return null;
+  }
+
+  const targetPath = await save({
+    title: "Export as HTML",
+    defaultPath: ensureHtmlExtension(suggestedName),
+    filters: htmlFilters,
+    canCreateDirectories: true,
+  });
+
+  if (!targetPath) {
+    return null;
+  }
+
+  await writeTextFile(targetPath, html);
 
   return {
     name: basenameFromPath(targetPath),

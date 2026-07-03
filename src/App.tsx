@@ -42,9 +42,12 @@ import {
   slashCommands,
   TextSelection,
 } from "./editorCommands";
+import { buildStandaloneHtml } from "./htmlExport";
 import {
   canUseNativeFileSystem,
+  ensureHtmlExtension,
   ensureMarkdownExtension,
+  exportHtmlDocument,
   openedFilesEvent,
   openNativeMarkdownDocument,
   openNativeMarkdownPath,
@@ -214,6 +217,7 @@ export function App() {
     tone: "neutral",
   });
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
+  const [printing, setPrinting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorPaneRef = useRef<HTMLElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -292,6 +296,17 @@ export function App() {
       saveCloseButtonRef.current?.focus();
     }
   }, [pendingCloseId]);
+
+  useEffect(() => {
+    if (!printing) {
+      return;
+    }
+    const previousTitle = document.title;
+    document.title = title === untitledTitle ? appName : title;
+    window.print();
+    document.title = previousTitle;
+    setPrinting(false);
+  }, [printing]);
 
   function getSelection(): TextSelection {
     const textarea = textareaRef.current;
@@ -721,6 +736,41 @@ export function App() {
     URL.revokeObjectURL(url);
   }
 
+  async function exportHtml() {
+    const html = buildStandaloneHtml(title, renderedHtml);
+    const suggested = ensureHtmlExtension(title === untitledTitle ? "hilldown" : title);
+
+    if (!nativeFiles) {
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = suggested;
+      link.click();
+      URL.revokeObjectURL(url);
+      setStatus({ message: "Exported HTML", tone: "success" });
+      return;
+    }
+
+    try {
+      const saved = await exportHtmlDocument(html, suggested);
+      if (!saved) {
+        setStatus({ message: "Export canceled", tone: "neutral" });
+        return;
+      }
+      setStatus({ message: `Exported ${saved.name}`, tone: "success" });
+    } catch (error) {
+      setStatus({
+        message: `Export failed: ${error instanceof Error ? error.message : String(error)}`,
+        tone: "error",
+      });
+    }
+  }
+
+  function printDocument() {
+    setPrinting(true);
+  }
+
   async function copyMarkdown() {
     await navigator.clipboard.writeText(markdown);
     setStatus({ message: "Copied Markdown", tone: "success" });
@@ -1031,6 +1081,14 @@ export function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {printing && (
+        <article
+          className="markdown-preview print-only"
+          aria-hidden="true"
+          dangerouslySetInnerHTML={{ __html: renderedHtml }}
+        />
       )}
     </div>
   );
