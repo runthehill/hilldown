@@ -14,7 +14,7 @@ const fileMocks = vi.hoisted(() => ({
   openNativeMarkdownPath: vi.fn(),
   printNativeDocument: vi.fn(() => Promise.resolve()),
   saveNativeMarkdownDocument: vi.fn(),
-  syncTabMenu: vi.fn(() => Promise.resolve()),
+  syncMenu: vi.fn(() => Promise.resolve()),
   takePendingNativeOpenedFilePaths: vi.fn(),
   titleFromFileName: vi.fn((name: string) => {
     const base = name.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "Untitled document";
@@ -52,6 +52,7 @@ function replaceEditorValue(value: string, selectionStart = value.length, select
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear();
   lastDownloadName = "";
   fileMocks.canUseNativeFileSystem.mockReturnValue(false);
   fileMocks.openNativeMarkdownDocument.mockResolvedValue(null);
@@ -265,8 +266,75 @@ describe("App", () => {
     await waitFor(() => expect(sourceEditor()).toHaveValue("# Two"));
 
     await waitFor(() =>
-      expect(fileMocks.syncTabMenu).toHaveBeenCalledWith(["Untitled document", "two"]),
+      expect(fileMocks.syncMenu).toHaveBeenCalledWith(["Untitled document", "two"], ["two.md"]),
     );
+  });
+
+  it("records an opened file in Open Recent and syncs it to the menu", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# R",
+      name: "recent.md",
+      path: "/tmp/recent.md",
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /open/i }));
+    await waitFor(() => expect(sourceEditor()).toHaveValue("# R"));
+
+    await waitFor(() =>
+      expect(fileMocks.syncMenu).toHaveBeenCalledWith(["Untitled document", "recent"], ["recent.md"]),
+    );
+  });
+
+  it("reopens a file from an openRecent menu event", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# First",
+      name: "first.md",
+      path: "/tmp/first.md",
+    });
+    fileMocks.openNativeMarkdownPath.mockResolvedValue({
+      contents: "# First",
+      name: "first.md",
+      path: "/tmp/first.md",
+    });
+
+    render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
+    fireEvent.click(screen.getByRole("button", { name: /open/i }));
+    await waitFor(() => expect(sourceEditor()).toHaveValue("# First"));
+
+    await act(async () => {
+      menuHandler?.({ payload: "openRecent0" });
+    });
+
+    await waitFor(() =>
+      expect(fileMocks.openNativeMarkdownPath).toHaveBeenCalledWith("/tmp/first.md"),
+    );
+  });
+
+  it("clears Open Recent on the clearRecent menu event", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# X",
+      name: "x.md",
+      path: "/tmp/x.md",
+    });
+
+    render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
+    fireEvent.click(screen.getByRole("button", { name: /open/i }));
+    await waitFor(() =>
+      expect(fileMocks.syncMenu).toHaveBeenCalledWith(expect.anything(), ["x.md"]),
+    );
+
+    fileMocks.syncMenu.mockClear();
+    await act(async () => {
+      menuHandler?.({ payload: "clearRecent" });
+    });
+
+    await waitFor(() => expect(fileMocks.syncMenu).toHaveBeenCalledWith(expect.anything(), []));
   });
 
   it("opens a new empty document in a new tab from the keyboard", () => {

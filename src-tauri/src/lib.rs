@@ -71,11 +71,36 @@ fn disable_smart_substitutions() {
 fn build_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     titles: &[String],
+    recent: &[String],
 ) -> tauri::Result<tauri::menu::Menu<R>> {
+    let mut recent_menu = SubmenuBuilder::new(app, "Open Recent");
+    if recent.is_empty() {
+        recent_menu = recent_menu.item(
+            &MenuItemBuilder::with_id("noRecent", "No Recent Files")
+                .enabled(false)
+                .build(app)?,
+        );
+    } else {
+        for (index, name) in recent.iter().enumerate() {
+            let label = if name.trim().is_empty() {
+                "Untitled document"
+            } else {
+                name.as_str()
+            };
+            recent_menu = recent_menu
+                .item(&MenuItemBuilder::with_id(format!("openRecent{index}"), label).build(app)?);
+        }
+        recent_menu = recent_menu
+            .separator()
+            .item(&MenuItemBuilder::with_id("clearRecent", "Clear Recent").build(app)?);
+    }
+    let recent_menu = recent_menu.build()?;
+
     #[cfg_attr(target_os = "macos", allow(unused_mut))]
     let mut file = SubmenuBuilder::new(app, "File")
         .item(&MenuItemBuilder::with_id("new", "New").accelerator("CmdOrCtrl+N").build(app)?)
         .item(&MenuItemBuilder::with_id("open", "Open…").accelerator("CmdOrCtrl+O").build(app)?)
+        .item(&recent_menu)
         .separator()
         .item(&MenuItemBuilder::with_id("save", "Save").accelerator("CmdOrCtrl+S").build(app)?)
         .item(&MenuItemBuilder::with_id("saveAs", "Save As…").accelerator("CmdOrCtrl+Shift+S").build(app)?)
@@ -195,7 +220,7 @@ pub fn run() {
             read_markdown_document,
             take_pending_opened_file_paths,
             print_document,
-            sync_tab_menu
+            sync_menu
         ])
         .on_menu_event(|app, event| {
             let id = event.id().0.clone();
@@ -209,7 +234,7 @@ pub fn run() {
                 app.state::<PendingOpenedFiles>().push(startup_paths);
             }
 
-            let menu = build_menu(app.handle(), &["Untitled document".to_string()])?;
+            let menu = build_menu(app.handle(), &["Untitled document".to_string()], &[])?;
             app.set_menu(menu)?;
 
             Ok(())
@@ -240,14 +265,15 @@ fn print_document<R: tauri::Runtime>(webview: tauri::Webview<R>) -> Result<(), S
     webview.print().map_err(|error| error.to_string())
 }
 
-/// Rebuild the native menu's Window submenu to list the currently open tabs.
-/// Menu operations must run on the main thread; commands are dispatched off
-/// it, so the rebuild + `set_menu` is scheduled via `run_on_main_thread`.
+/// Rebuild the native menu's Window submenu (open tabs) and File > Open
+/// Recent submenu. Menu operations must run on the main thread; commands are
+/// dispatched off it, so the rebuild + `set_menu` is scheduled via
+/// `run_on_main_thread`.
 #[tauri::command]
-fn sync_tab_menu(app: tauri::AppHandle, titles: Vec<String>) -> Result<(), String> {
+fn sync_menu(app: tauri::AppHandle, titles: Vec<String>, recent: Vec<String>) -> Result<(), String> {
     let handle = app.clone();
     app.run_on_main_thread(move || {
-        match build_menu(&handle, &titles) {
+        match build_menu(&handle, &titles, &recent) {
             Ok(menu) => {
                 if let Err(error) = handle.set_menu(menu) {
                     eprintln!("failed to set menu: {error}");

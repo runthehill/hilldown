@@ -101,11 +101,11 @@ export async function printNativeDocument(): Promise<void> {
   await invoke("print_document");
 }
 
-export async function syncTabMenu(titles: string[]): Promise<void> {
+export async function syncMenu(titles: string[], recent: string[]): Promise<void> {
   if (!canUseNativeFileSystem()) {
     return; // browser fallback has no native menu
   }
-  await invoke("sync_tab_menu", { titles });
+  await invoke("sync_menu", { titles, recent });
 }
 
 export async function saveNativeMarkdownDocument(

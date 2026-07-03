@@ -43,6 +43,7 @@ import {
   TextSelection,
 } from "./editorCommands";
 import { buildStandaloneHtml } from "./htmlExport";
+import { addRecent, loadRecentFiles, removeRecent, saveRecentFiles, type RecentFile } from "./recentFiles";
 import {
   canUseNativeFileSystem,
   ensureHtmlExtension,
@@ -54,7 +55,7 @@ import {
   openNativeMarkdownPath,
   printNativeDocument,
   saveNativeMarkdownDocument,
-  syncTabMenu,
+  syncMenu,
   takePendingNativeOpenedFilePaths,
   titleFromFileName,
 } from "./fileService";
@@ -222,6 +223,7 @@ export function App() {
     tone: "neutral",
   });
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
+  const [recentFiles, setRecentFiles] = useState<RecentFile[]>(() => loadRecentFiles());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorPaneRef = useRef<HTMLElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -254,6 +256,9 @@ export function App() {
     [session.documents],
   );
   const tabMenuKey = tabTitles.join("\n");
+
+  const recentNames = useMemo(() => recentFiles.map((file) => file.name), [recentFiles]);
+  const recentKey = recentNames.join("\n");
 
   const slashQuery = useMemo(() => {
     if (selection.start !== selection.end) {
@@ -401,6 +406,14 @@ export function App() {
     }
   }
 
+  function rememberRecent(path: string, name: string) {
+    setRecentFiles((list) => addRecent(list, { path, name }));
+  }
+
+  useEffect(() => {
+    saveRecentFiles(recentFiles);
+  }, [recentFiles]);
+
   function loadDocument(contents: string, name: string, path: string | null) {
     setSession((current) =>
       openDocumentInSession(
@@ -409,21 +422,25 @@ export function App() {
       ),
     );
     setStatus({ message: `Opened ${name}`, tone: "success" });
+    if (path) {
+      rememberRecent(path, name);
+    }
   }
 
-  async function openNativePath(path: string) {
+  async function openNativePath(path: string): Promise<boolean> {
     try {
       const opened = await openNativeMarkdownPath(path);
       if (!opened) {
-        return;
+        return false;
       }
-
       loadDocument(opened.contents, opened.name, opened.path);
+      return true;
     } catch (error) {
       setStatus({
         message: `Open failed: ${error instanceof Error ? error.message : String(error)}`,
         tone: "error",
       });
+      return false;
     }
   }
 
@@ -507,13 +524,13 @@ export function App() {
       return;
     }
     const timer = window.setTimeout(() => {
-      void syncTabMenu(tabTitles).catch(() => {
+      void syncMenu(tabTitles, recentNames).catch(() => {
         /* the native menu is a nicety; ignore sync failures */
       });
     }, 150);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nativeFiles, tabMenuKey]);
+  }, [nativeFiles, tabMenuKey, recentKey]);
 
   function resetDocument() {
     setSession((current) => addDocument(current, createEmptyDocument(crypto.randomUUID())));
@@ -567,6 +584,21 @@ export function App() {
     if (target) {
       selectTab(target.id);
     }
+  }
+
+  async function openRecentByIndex(index: number) {
+    const entry = recentFiles[index];
+    if (!entry) {
+      return;
+    }
+    const opened = await openNativePath(entry.path);
+    if (!opened) {
+      setRecentFiles((list) => removeRecent(list, entry.path));
+    }
+  }
+
+  function clearRecentFiles() {
+    setRecentFiles([]);
   }
 
   function shiftTab(delta: number) {
@@ -689,6 +721,9 @@ export function App() {
           lastSavedMarkdown: doc.markdown,
         })),
       );
+      if (saved.path) {
+        rememberRecent(saved.path, saved.name);
+      }
       setStatus({ message: `Saved ${saved.name}`, tone: "success" });
       return true;
     } catch (error) {
@@ -869,6 +904,7 @@ export function App() {
       case "viewPreview": return setMode("preview");
       case "nextTab": return nextTab();
       case "prevTab": return previousTab();
+      case "clearRecent": return clearRecentFiles();
       case "bold":
       case "italic":
       case "heading1":
@@ -883,7 +919,12 @@ export function App() {
       case "divider":
         return runTool(id as ToolAction);
       default:
-        if (id.startsWith("goToTab")) {
+        if (id.startsWith("openRecent")) {
+          const index = Number(id.slice("openRecent".length));
+          if (Number.isInteger(index)) {
+            void openRecentByIndex(index);
+          }
+        } else if (id.startsWith("goToTab")) {
           const index = Number(id.slice("goToTab".length)) - 1;
           if (Number.isInteger(index)) {
             goToTab(index);
