@@ -547,7 +547,7 @@ describe("App", () => {
     render(<App />);
     replaceEditorValue("# Keep me");
 
-    fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^new$/i }));
 
     expect(window.confirm).not.toHaveBeenCalled();
     expect(sourceEditor()).toHaveValue("");

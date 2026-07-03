@@ -17,12 +17,14 @@ import {
   ListChecks,
   ListOrdered,
   PanelLeft,
+  Plus,
   Quote,
   Redo2,
   Rows3,
   Save,
   SeparatorHorizontal,
   Undo2,
+  X,
 } from "lucide-react";
 import { marked } from "marked";
 import { listen } from "@tauri-apps/api/event";
@@ -356,11 +358,11 @@ export function App() {
     if (!textarea) {
       return;
     }
+    textarea.setSelectionRange(activeDoc.selection.start, activeDoc.selection.end);
+    textarea.focus();
     const remembered = scrollPositionsRef.current.get(session.activeId) ?? 0;
     textarea.scrollTop = remembered;
     textarea.scrollLeft = 0;
-    textarea.setSelectionRange(activeDoc.selection.start, activeDoc.selection.end);
-    textarea.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.activeId]);
 
@@ -448,6 +450,43 @@ export function App() {
   function resetDocument() {
     setSession((current) => addDocument(current, createEmptyDocument(crypto.randomUUID())));
     setStatus({ message: "New document", tone: "neutral" });
+  }
+
+  function selectTab(id: string) {
+    setSession((current) => setActive(current, id));
+  }
+
+  function closeTab(id: string) {
+    const target = session.documents.find((doc) => doc.id === id);
+    if (target && isDocumentDirty(target) && !window.confirm(`Close “${target.title}” without saving?`)) {
+      return;
+    }
+    scrollPositionsRef.current.delete(id);
+    setSession((current) => closeDocument(current, id, () => createEmptyDocument(crypto.randomUUID())));
+  }
+
+  function goToTab(index: number) {
+    const target = session.documents[index];
+    if (target) {
+      selectTab(target.id);
+    }
+  }
+
+  function shiftTab(delta: number) {
+    const index = session.documents.findIndex((doc) => doc.id === session.activeId);
+    const count = session.documents.length;
+    const next = session.documents[(index + delta + count) % count];
+    if (next) {
+      selectTab(next.id);
+    }
+  }
+
+  function nextTab() {
+    shiftTab(1);
+  }
+
+  function previousTab() {
+    shiftTab(-1);
   }
 
   function runTool(action: ToolAction) {
@@ -719,6 +758,53 @@ export function App() {
           <input ref={fileInputRef} type="file" accept=".md,.markdown,.mdown,.txt" hidden onChange={importMarkdown} />
         </div>
       </header>
+
+      <nav className="tab-strip" role="tablist" aria-label="Open documents">
+        {session.documents.map((doc) => {
+          const dirty = isDocumentDirty(doc);
+          const active = doc.id === session.activeId;
+          return (
+            <div
+              key={doc.id}
+              role="tab"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              className={`tab ${active ? "active" : ""}`}
+              title={doc.path ?? doc.title}
+              onClick={() => selectTab(doc.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  selectTab(doc.id);
+                }
+              }}
+              onAuxClick={(event) => {
+                if (event.button === 1) {
+                  event.preventDefault();
+                  closeTab(doc.id);
+                }
+              }}
+            >
+              <span className="tab-title">{doc.title || "Untitled document"}</span>
+              {dirty && <span className="tab-dirty" aria-label="Unsaved changes">●</span>}
+              <button
+                type="button"
+                className="tab-close"
+                aria-label={`Close ${doc.title}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  closeTab(doc.id);
+                }}
+              >
+                <X size={13} />
+              </button>
+            </div>
+          );
+        })}
+        <button type="button" className="tab-new" aria-label="New tab" title="New tab" onClick={resetDocument}>
+          <Plus size={15} />
+        </button>
+      </nav>
 
       <section className="toolbar" role="toolbar" aria-label="Formatting toolbar">
         <div className="history-controls">
