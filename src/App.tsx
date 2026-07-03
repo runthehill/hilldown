@@ -556,6 +556,9 @@ export function App() {
   function performCloseTab(id: string) {
     scrollPositionsRef.current.delete(id);
     setSession((current) => closeDocument(current, id, () => createEmptyDocument(crypto.randomUUID())));
+    // The status line reflects the last action ("Opened X", "Saved X", …); once
+    // that document is gone, reset it so a stale message doesn't outlive the tab.
+    setStatus({ message: "Ready", tone: "neutral" });
   }
 
   function cancelPendingClose() {

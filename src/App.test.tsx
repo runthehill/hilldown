@@ -147,6 +147,24 @@ describe("App", () => {
     expect(screen.queryByText("Not saved")).not.toBeInTheDocument();
   });
 
+  it("resets the footer status when a document is closed", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# Doc",
+      name: "doc.md",
+      path: "/tmp/doc.md",
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /open/i }));
+    await waitFor(() => expect(screen.getByText("Opened doc.md")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /^close doc$/i }));
+
+    await waitFor(() => expect(screen.queryByText("Opened doc.md")).not.toBeInTheDocument());
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+  });
+
   it.each([
     ["Italic", "plain", 0, 5, "_plain_"],
     ["Heading 1", "plain", 0, 5, "# plain"],
