@@ -213,14 +213,19 @@ export function App() {
     message: "Ready",
     tone: "neutral",
   });
+  const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorPaneRef = useRef<HTMLElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const slashMenuRef = useRef<HTMLDivElement>(null);
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const saveCloseButtonRef = useRef<HTMLButtonElement>(null);
 
   const nativeFiles = canUseNativeFileSystem();
   const isDirty = isDocumentDirty(activeDoc);
+  const pendingCloseDoc = pendingCloseId
+    ? session.documents.find((doc) => doc.id === pendingCloseId) ?? null
+    : null;
 
   const renderedHtml = useMemo(() => {
     const raw = marked.parse(markdown) as string;
@@ -281,6 +286,12 @@ export function App() {
   useEffect(() => {
     document.title = `${isDirty ? "* " : ""}${title} - ${appName}`;
   }, [isDirty, title]);
+
+  useEffect(() => {
+    if (pendingCloseId) {
+      saveCloseButtonRef.current?.focus();
+    }
+  }, [pendingCloseId]);
 
   function getSelection(): TextSelection {
     const textarea = textareaRef.current;
@@ -456,13 +467,42 @@ export function App() {
     setSession((current) => setActive(current, id));
   }
 
-  function closeTab(id: string) {
+  function requestCloseTab(id: string) {
     const target = session.documents.find((doc) => doc.id === id);
-    if (target && isDocumentDirty(target) && !window.confirm(`Close “${target.title}” without saving?`)) {
+    if (target && isDocumentDirty(target)) {
+      setSession((current) => setActive(current, id));
+      setPendingCloseId(id);
       return;
     }
+    performCloseTab(id);
+  }
+
+  function performCloseTab(id: string) {
     scrollPositionsRef.current.delete(id);
     setSession((current) => closeDocument(current, id, () => createEmptyDocument(crypto.randomUUID())));
+  }
+
+  function cancelPendingClose() {
+    setPendingCloseId(null);
+  }
+
+  function discardPendingClose() {
+    if (pendingCloseId) {
+      performCloseTab(pendingCloseId);
+    }
+    setPendingCloseId(null);
+  }
+
+  async function savePendingClose() {
+    const id = pendingCloseId;
+    if (!id) {
+      return;
+    }
+    const saved = await saveDocument(false);
+    if (saved) {
+      performCloseTab(id);
+    }
+    setPendingCloseId(null);
   }
 
   function goToTab(index: number) {
@@ -558,12 +598,12 @@ export function App() {
     }
   }
 
-  async function saveDocument(forceSaveAs = false) {
+  async function saveDocument(forceSaveAs = false): Promise<boolean> {
     if (!nativeFiles) {
       downloadMarkdown();
       setSession((current) => replaceActive(current, (doc) => ({ ...doc, lastSavedMarkdown: doc.markdown })));
       setStatus({ message: "Downloaded Markdown", tone: "success" });
-      return;
+      return true;
     }
 
     try {
@@ -576,7 +616,7 @@ export function App() {
 
       if (!saved) {
         setStatus({ message: "Save canceled", tone: "neutral" });
-        return;
+        return false;
       }
 
       setSession((current) =>
@@ -588,15 +628,22 @@ export function App() {
         })),
       );
       setStatus({ message: `Saved ${saved.name}`, tone: "success" });
+      return true;
     } catch (error) {
       setStatus({
         message: `Save failed: ${error instanceof Error ? error.message : String(error)}`,
         tone: "error",
       });
+      return false;
     }
   }
 
   function onEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (pendingCloseId) {
+      event.preventDefault();
+      return;
+    }
+
     const isMod = event.metaKey || event.ctrlKey;
 
     if (isMod && event.key.toLowerCase() === "s") {
@@ -708,7 +755,11 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
+      <header
+        className="topbar"
+        aria-hidden={pendingCloseDoc ? true : undefined}
+        inert={pendingCloseDoc ? true : undefined}
+      >
         <div className="document-title">
           <div className="brand-mark" aria-hidden="true">H</div>
           <div>
@@ -759,7 +810,13 @@ export function App() {
         </div>
       </header>
 
-      <nav className="tab-strip" role="tablist" aria-label="Open documents">
+      <nav
+        className="tab-strip"
+        role="tablist"
+        aria-label="Open documents"
+        aria-hidden={pendingCloseDoc ? true : undefined}
+        inert={pendingCloseDoc ? true : undefined}
+      >
         {session.documents.map((doc) => {
           const dirty = isDocumentDirty(doc);
           const active = doc.id === session.activeId;
@@ -781,7 +838,7 @@ export function App() {
               onAuxClick={(event) => {
                 if (event.button === 1) {
                   event.preventDefault();
-                  closeTab(doc.id);
+                  requestCloseTab(doc.id);
                 }
               }}
             >
@@ -793,7 +850,7 @@ export function App() {
                 aria-label={`Close ${doc.title}`}
                 onClick={(event) => {
                   event.stopPropagation();
-                  closeTab(doc.id);
+                  requestCloseTab(doc.id);
                 }}
               >
                 <X size={13} />
@@ -806,7 +863,13 @@ export function App() {
         </button>
       </nav>
 
-      <section className="toolbar" role="toolbar" aria-label="Formatting toolbar">
+      <section
+        className="toolbar"
+        role="toolbar"
+        aria-label="Formatting toolbar"
+        aria-hidden={pendingCloseDoc ? true : undefined}
+        inert={pendingCloseDoc ? true : undefined}
+      >
         <div className="history-controls">
           <button className="icon-button" onClick={undo} disabled={historyIndex === 0} title="Undo" aria-label="Undo">
             <Undo2 size={17} />
@@ -905,7 +968,11 @@ export function App() {
         )}
       </main>
 
-      <footer className="statusbar">
+      <footer
+        className="statusbar"
+        aria-hidden={pendingCloseDoc ? true : undefined}
+        inert={pendingCloseDoc ? true : undefined}
+      >
         <span>{wordCount} words</span>
         <span>{markdown.length} characters</span>
         <span>
@@ -924,6 +991,47 @@ export function App() {
           </button>
         </div>
       </footer>
+
+      {pendingCloseDoc && (
+        <div className="modal-overlay" role="presentation" onClick={cancelPendingClose}>
+          <div
+            className="modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="unsaved-changes-title"
+            aria-describedby="unsaved-changes-desc"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                cancelPendingClose();
+              }
+            }}
+          >
+            <h2 id="unsaved-changes-title">Unsaved changes</h2>
+            <p id="unsaved-changes-desc">
+              Do you want to save the changes you made to “{pendingCloseDoc.title}”? Your changes will be
+              lost if you don’t save them.
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="text-button" onClick={cancelPendingClose}>
+                Cancel
+              </button>
+              <button type="button" className="text-button danger" onClick={discardPendingClose}>
+                Don't Save
+              </button>
+              <button
+                type="button"
+                className="text-button primary"
+                ref={saveCloseButtonRef}
+                onClick={() => void savePendingClose()}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

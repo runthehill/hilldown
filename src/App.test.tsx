@@ -552,4 +552,59 @@ describe("App", () => {
     expect(window.confirm).not.toHaveBeenCalled();
     expect(sourceEditor()).toHaveValue("");
   });
+
+  describe("unsaved changes on close", () => {
+    it("prompts to save when closing a dirty tab instead of closing it", () => {
+      render(<App />);
+      replaceEditorValue("# Edited");
+
+      fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+
+      expect(screen.getByRole("alertdialog", { name: /unsaved changes/i })).toBeInTheDocument();
+      expect(sourceEditor()).toHaveValue("# Edited");
+      expect(window.confirm).not.toHaveBeenCalled();
+    });
+
+    it("discards and closes when Don't Save is chosen", () => {
+      render(<App />);
+      replaceEditorValue("# Edited");
+
+      fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+      fireEvent.click(screen.getByRole("button", { name: /don't save/i }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(sourceEditor()).toHaveValue("");
+    });
+
+    it("keeps the tab when the close is canceled", () => {
+      render(<App />);
+      replaceEditorValue("# Edited");
+
+      fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(sourceEditor()).toHaveValue("# Edited");
+    });
+
+    it("saves then closes when Save is chosen (browser download)", async () => {
+      render(<App />);
+      replaceEditorValue("# Edited");
+
+      fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() => expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+      expect(sourceEditor()).toHaveValue("");
+    });
+
+    it("closes a clean tab immediately without a dialog", () => {
+      render(<App />);
+
+      fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+  });
 });
