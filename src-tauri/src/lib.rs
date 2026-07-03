@@ -81,7 +81,6 @@ fn build_menu<R: tauri::Runtime>(
         .item(&MenuItemBuilder::with_id("saveAs", "Save As…").accelerator("CmdOrCtrl+Shift+S").build(app)?)
         .separator()
         .item(&MenuItemBuilder::with_id("exportHtml", "Export as HTML…").build(app)?)
-        .item(&MenuItemBuilder::with_id("exportPdf", "Export as PDF…").build(app)?)
         .item(&MenuItemBuilder::with_id("print", "Print…").accelerator("CmdOrCtrl+P").build(app)?)
         .separator()
         .item(&MenuItemBuilder::with_id("closeTab", "Close Tab").accelerator("CmdOrCtrl+W").build(app)?);

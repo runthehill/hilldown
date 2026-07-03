@@ -1012,6 +1012,11 @@ textarea::-webkit-scrollbar-track {
   display: none;
 }
 
+/* Give the printed / PDF page comfortable margins on every sheet. */
+@page {
+  margin: 2cm;
+}
+
 @media print {
   .topbar,
   .tab-strip,
