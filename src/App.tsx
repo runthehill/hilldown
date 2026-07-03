@@ -52,7 +52,9 @@ import {
   openedFilesEvent,
   openNativeMarkdownDocument,
   openNativeMarkdownPath,
+  printNativeDocument,
   saveNativeMarkdownDocument,
+  syncTabMenu,
   takePendingNativeOpenedFilePaths,
   titleFromFileName,
 } from "./fileService";
@@ -246,6 +248,12 @@ export function App() {
   }, [markdown]);
 
   const lineColumn = useMemo(() => getLineColumn(markdown, selection.end), [markdown, selection.end]);
+
+  const tabTitles = useMemo(
+    () => session.documents.map((doc) => doc.title || "Untitled document"),
+    [session.documents],
+  );
+  const tabMenuKey = tabTitles.join("\n");
 
   const slashQuery = useMemo(() => {
     if (selection.start !== selection.end) {
@@ -493,6 +501,19 @@ export function App() {
       unlisten?.();
     };
   }, [nativeFiles]);
+
+  useEffect(() => {
+    if (!nativeFiles) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void syncTabMenu(tabTitles).catch(() => {
+        /* the native menu is a nicety; ignore sync failures */
+      });
+    }, 150);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nativeFiles, tabMenuKey]);
 
   function resetDocument() {
     setSession((current) => addDocument(current, createEmptyDocument(crypto.randomUUID())));
@@ -797,11 +818,23 @@ export function App() {
     }
   }
 
-  function printDocument() {
+  async function printDocument() {
     const previousTitle = document.title;
     document.title = title === untitledTitle ? appName : title;
-    window.print();
-    document.title = previousTitle;
+    try {
+      if (nativeFiles) {
+        await printNativeDocument();
+      } else {
+        window.print();
+      }
+    } catch (error) {
+      setStatus({
+        message: `Print failed: ${error instanceof Error ? error.message : String(error)}`,
+        tone: "error",
+      });
+    } finally {
+      document.title = previousTitle;
+    }
   }
 
   async function copyMarkdown() {
@@ -826,7 +859,7 @@ export function App() {
       case "closeTab": return requestCloseTab(session.activeId);
       case "exportHtml": return void exportHtml();
       case "exportPdf":
-      case "print": return printDocument();
+      case "print": return void printDocument();
       case "undo": return undo();
       case "redo": return redo();
       case "copyMarkdown": return void copyMarkdown();

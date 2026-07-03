@@ -68,7 +68,10 @@ fn disable_smart_substitutions() {
 /// Tauri's native, OS-provided behaviour. Undo/Redo are custom items because
 /// the app drives its own history model rather than the textarea's native
 /// undo stack.
-fn build_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+fn build_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    titles: &[String],
+) -> tauri::Result<tauri::menu::Menu<R>> {
     #[cfg_attr(target_os = "macos", allow(unused_mut))]
     let mut file = SubmenuBuilder::new(app, "File")
         .item(&MenuItemBuilder::with_id("new", "New").accelerator("CmdOrCtrl+N").build(app)?)
@@ -137,12 +140,18 @@ fn build_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tau
         .item(&MenuItemBuilder::with_id("nextTab", "Next Tab").accelerator("CmdOrCtrl+Alt+Right").build(app)?)
         .item(&MenuItemBuilder::with_id("prevTab", "Previous Tab").accelerator("CmdOrCtrl+Alt+Left").build(app)?)
         .separator();
-    for n in 1..=9 {
-        window = window.item(
-            &MenuItemBuilder::with_id(format!("goToTab{n}"), format!("Go to Tab {n}"))
-                .accelerator(format!("CmdOrCtrl+{n}"))
-                .build(app)?,
-        );
+    for (index, tab_title) in titles.iter().enumerate() {
+        let position = index + 1; // 1-based; frontend parses Number(id.slice(7)) - 1
+        let label = if tab_title.trim().is_empty() {
+            format!("{position}. Untitled document")
+        } else {
+            format!("{position}. {tab_title}")
+        };
+        let mut item = MenuItemBuilder::with_id(format!("goToTab{position}"), label);
+        if position <= 9 {
+            item = item.accelerator(format!("CmdOrCtrl+{position}"));
+        }
+        window = window.item(&item.build(app)?);
     }
     let window = window.build()?;
 
@@ -185,7 +194,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             read_markdown_document,
-            take_pending_opened_file_paths
+            take_pending_opened_file_paths,
+            print_document,
+            sync_tab_menu
         ])
         .on_menu_event(|app, event| {
             let id = event.id().0.clone();
@@ -199,7 +210,7 @@ pub fn run() {
                 app.state::<PendingOpenedFiles>().push(startup_paths);
             }
 
-            let menu = build_menu(app.handle())?;
+            let menu = build_menu(app.handle(), &["Untitled document".to_string()])?;
             app.set_menu(menu)?;
 
             Ok(())
@@ -218,6 +229,35 @@ pub fn run() {
 #[tauri::command]
 fn take_pending_opened_file_paths(state: tauri::State<'_, PendingOpenedFiles>) -> Vec<String> {
     state.take()
+}
+
+/// Open the native macOS print panel for the current webview. Delegates to
+/// Tauri's `Webview::print()` -> wry's WKWebView print operation, which shows
+/// the system print / "Save as PDF" sheet. `window.print()` is a no-op in
+/// WKWebView, so the frontend calls this instead under Tauri.
+#[cfg(desktop)]
+#[tauri::command]
+fn print_document<R: tauri::Runtime>(webview: tauri::Webview<R>) -> Result<(), String> {
+    webview.print().map_err(|error| error.to_string())
+}
+
+/// Rebuild the native menu's Window submenu to list the currently open tabs.
+/// Menu operations must run on the main thread; commands are dispatched off
+/// it, so the rebuild + `set_menu` is scheduled via `run_on_main_thread`.
+#[tauri::command]
+fn sync_tab_menu(app: tauri::AppHandle, titles: Vec<String>) -> Result<(), String> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        match build_menu(&handle, &titles) {
+            Ok(menu) => {
+                if let Err(error) = handle.set_menu(menu) {
+                    eprintln!("failed to set menu: {error}");
+                }
+            }
+            Err(error) => eprintln!("failed to rebuild menu: {error}"),
+        }
+    })
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

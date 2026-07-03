@@ -12,7 +12,9 @@ const fileMocks = vi.hoisted(() => ({
   openedFilesEvent: "hilldown://open-files",
   openNativeMarkdownDocument: vi.fn(),
   openNativeMarkdownPath: vi.fn(),
+  printNativeDocument: vi.fn(() => Promise.resolve()),
   saveNativeMarkdownDocument: vi.fn(),
+  syncTabMenu: vi.fn(() => Promise.resolve()),
   takePendingNativeOpenedFilePaths: vi.fn(),
   titleFromFileName: vi.fn((name: string) => {
     const base = name.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "Untitled document";
@@ -208,6 +210,63 @@ describe("App", () => {
     act(() => menuHandler?.({ payload: "open" }));
     await waitFor(() => expect(sourceEditor()).toHaveValue("# Keyboard open"));
     expect(screen.getByText("Opened keyboard.md")).toBeInTheDocument();
+  });
+
+  it("prints via the native command in the desktop app", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+
+    render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
+
+    await act(async () => {
+      menuHandler?.({ payload: "print" });
+    });
+
+    expect(fileMocks.printNativeDocument).toHaveBeenCalled();
+  });
+
+  it("routes Export as PDF through the same native print command", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+
+    render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
+
+    await act(async () => {
+      menuHandler?.({ payload: "exportPdf" });
+    });
+
+    expect(fileMocks.printNativeDocument).toHaveBeenCalled();
+  });
+
+  it("surfaces a status message when native print fails", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.printNativeDocument.mockRejectedValueOnce(new Error("no printer"));
+
+    render(<App />);
+    await waitFor(() => expect(menuHandler).toBeDefined());
+
+    await act(async () => {
+      menuHandler?.({ payload: "print" });
+    });
+
+    expect(await screen.findByText("Print failed: no printer")).toBeInTheDocument();
+  });
+
+  it("syncs the native Window menu to the open tabs", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# Two",
+      name: "two.md",
+      path: "/tmp/two.md",
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /open/i }));
+    await waitFor(() => expect(sourceEditor()).toHaveValue("# Two"));
+
+    await waitFor(() =>
+      expect(fileMocks.syncTabMenu).toHaveBeenCalledWith(["Untitled document", "two"]),
+    );
   });
 
   it("opens a new empty document in a new tab from the keyboard", () => {

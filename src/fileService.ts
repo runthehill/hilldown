@@ -94,6 +94,20 @@ export async function takePendingNativeOpenedFilePaths(): Promise<string[]> {
   return invoke<string[]>("take_pending_opened_file_paths");
 }
 
+export async function printNativeDocument(): Promise<void> {
+  if (!canUseNativeFileSystem()) {
+    return;
+  }
+  await invoke("print_document");
+}
+
+export async function syncTabMenu(titles: string[]): Promise<void> {
+  if (!canUseNativeFileSystem()) {
+    return; // browser fallback has no native menu
+  }
+  await invoke("sync_tab_menu", { titles });
+}
+
 export async function saveNativeMarkdownDocument(
   contents: string,
   currentPath: string | null,
