@@ -54,4 +54,10 @@ describe("recentFiles", () => {
     );
     expect(loadRecentFiles()).toEqual([{ path: "/ok", name: "ok" }]);
   });
+
+  it("caps a stored oversized list at MAX_RECENT on load", () => {
+    const oversized = Array.from({ length: MAX_RECENT + 3 }, (_, i) => f(`/f${i}`));
+    window.localStorage.setItem("hilldown.recent", JSON.stringify(oversized));
+    expect(loadRecentFiles()).toHaveLength(MAX_RECENT);
+  });
 });

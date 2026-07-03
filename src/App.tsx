@@ -258,7 +258,7 @@ export function App() {
   const tabMenuKey = tabTitles.join("\n");
 
   const recentNames = useMemo(() => recentFiles.map((file) => file.name), [recentFiles]);
-  const recentKey = recentNames.join("\n");
+  const recentKey = recentFiles.map((file) => `${file.name} ${file.path}`).join("\n");
 
   const slashQuery = useMemo(() => {
     if (selection.start !== selection.end) {

@@ -25,13 +25,15 @@ export function loadRecentFiles(): RecentFile[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter(
-      (item): item is RecentFile =>
-        typeof item === "object" &&
-        item !== null &&
-        typeof (item as RecentFile).path === "string" &&
-        typeof (item as RecentFile).name === "string",
-    );
+    return parsed
+      .filter(
+        (item): item is RecentFile =>
+          typeof item === "object" &&
+          item !== null &&
+          typeof (item as RecentFile).path === "string" &&
+          typeof (item as RecentFile).name === "string",
+      )
+      .slice(0, MAX_RECENT);
   } catch {
     return [];
   }
