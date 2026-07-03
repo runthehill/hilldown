@@ -132,6 +132,21 @@ describe("App", () => {
     expect(screen.getByText("Unsaved")).toBeInTheDocument();
   });
 
+  it("shows 'Not saved' for a never-saved document and 'Saved' only after saving to a file", async () => {
+    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
+    fileMocks.saveNativeMarkdownDocument.mockResolvedValue({ name: "note.md", path: "/tmp/note.md" });
+
+    render(<App />);
+
+    expect(screen.getByText("Not saved")).toBeInTheDocument();
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+    expect(screen.queryByText("Not saved")).not.toBeInTheDocument();
+  });
+
   it.each([
     ["Italic", "plain", 0, 5, "_plain_"],
     ["Heading 1", "plain", 0, 5, "# plain"],

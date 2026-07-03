@@ -231,6 +231,10 @@ textarea:focus-visible,
   color: var(--ok);
 }
 
+.save-state.new {
+  color: var(--ink-3);
+}
+
 .save-state.dirty {
   color: var(--warn);
 }

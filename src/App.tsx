@@ -949,6 +949,11 @@ export function App() {
   const editorVisible = mode === "edit" || mode === "split";
   const previewVisible = mode === "preview" || mode === "split";
   const pathLabel = documentPath ?? (nativeFiles ? "No file selected" : "Browser fallback mode");
+  const saveState = isDirty
+    ? { className: "dirty", label: "Unsaved" }
+    : documentPath
+      ? { className: "clean", label: "Saved" }
+      : { className: "new", label: "Not saved" };
   const slashMenuOpen = slashQuery !== null && visibleSlashCommands.length > 0;
   const activeSlashOptionId =
     slashMenuOpen && visibleSlashCommands[slashIndex]
@@ -972,8 +977,8 @@ export function App() {
               onChange={(event) => renameActive(event.target.value)}
             />
             <p className="document-path" title={pathLabel}>
-              <span className={`save-state ${isDirty ? "dirty" : "clean"}`}>
-                {isDirty ? "Unsaved" : "Saved"}
+              <span className={`save-state ${saveState.className}`}>
+                {saveState.label}
               </span>
               <span>{pathLabel}</span>
             </p>
