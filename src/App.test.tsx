@@ -200,14 +200,14 @@ describe("App", () => {
     expect(screen.getByText("Opened keyboard.md")).toBeInTheDocument();
   });
 
-  it("creates a new document from the keyboard after dirty confirmation", () => {
+  it("opens a new empty document in a new tab from the keyboard", () => {
     render(<App />);
     const editor = replaceEditorValue("# Dirty shortcut");
 
     fireEvent.keyDown(editor, { key: "n", ctrlKey: true });
 
-    expect(window.confirm).toHaveBeenCalledWith("Discard unsaved changes and create a new document?");
-    expect(editor).toHaveValue("");
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(sourceEditor()).toHaveValue("");
   });
 
   it("indents and outdents with Tab shortcuts", () => {
@@ -413,37 +413,42 @@ describe("App", () => {
     expect(screen.getByRole("textbox", { name: /document title/i })).toHaveValue("event-opened");
   });
 
-  it("keeps dirty content when a native opened file is rejected", async () => {
+  it("opens an event-emitted native file in a new tab even with unsaved changes", async () => {
     fileMocks.canUseNativeFileSystem.mockReturnValue(true);
     fileMocks.takePendingNativeOpenedFilePaths
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce(["/tmp/rejected.md"]);
-    vi.mocked(window.confirm).mockReturnValue(false);
+      .mockResolvedValueOnce(["/tmp/incoming.md"]);
+    fileMocks.openNativeMarkdownPath.mockResolvedValue({
+      contents: "# Incoming",
+      name: "incoming.md",
+      path: "/tmp/incoming.md",
+    });
 
     render(<App />);
-    const editor = replaceEditorValue("# Keep dirty");
+    replaceEditorValue("# Keep dirty");
     await waitFor(() => expect(eventMocks.listen).toHaveBeenCalled());
 
-    openedFilesHandler?.({ payload: ["/tmp/rejected.md"] });
+    openedFilesHandler?.({ payload: ["/tmp/incoming.md"] });
 
-    await waitFor(() => expect(fileMocks.takePendingNativeOpenedFilePaths).toHaveBeenCalledTimes(2));
-    expect(window.confirm).toHaveBeenCalledWith("Discard unsaved changes and open another document?");
-    expect(fileMocks.openNativeMarkdownPath).not.toHaveBeenCalled();
-    expect(editor).toHaveValue("# Keep dirty");
+    await waitFor(() => expect(sourceEditor()).toHaveValue("# Incoming"));
+    expect(window.confirm).not.toHaveBeenCalled();
   });
 
-  it("does not open another document when dirty changes are kept", async () => {
+  it("opens another document via the button even with unsaved changes", async () => {
     fileMocks.canUseNativeFileSystem.mockReturnValue(true);
-    vi.mocked(window.confirm).mockReturnValue(false);
+    fileMocks.openNativeMarkdownDocument.mockResolvedValue({
+      contents: "# Fresh",
+      name: "fresh.md",
+      path: "/tmp/fresh.md",
+    });
 
     render(<App />);
-    const editor = replaceEditorValue("# Dirty");
+    replaceEditorValue("# Dirty");
 
     fireEvent.click(screen.getByRole("button", { name: /open/i }));
 
-    expect(window.confirm).toHaveBeenCalledWith("Discard unsaved changes and open another document?");
-    expect(fileMocks.openNativeMarkdownDocument).not.toHaveBeenCalled();
-    expect(editor).toHaveValue("# Dirty");
+    await waitFor(() => expect(sourceEditor()).toHaveValue("# Fresh"));
+    expect(window.confirm).not.toHaveBeenCalled();
   });
 
   it("shows native open cancel and error states", async () => {
@@ -538,15 +543,13 @@ describe("App", () => {
     expect(screen.getByText("Downloaded Markdown")).toBeInTheDocument();
   });
 
-  it("keeps dirty content when new document confirmation is rejected", () => {
-    vi.mocked(window.confirm).mockReturnValue(false);
-
+  it("adds a new empty document when New is clicked", () => {
     render(<App />);
-    const editor = replaceEditorValue("# Keep me");
+    replaceEditorValue("# Keep me");
 
     fireEvent.click(screen.getByRole("button", { name: /new/i }));
 
-    expect(window.confirm).toHaveBeenCalledWith("Discard unsaved changes and create a new document?");
-    expect(editor).toHaveValue("# Keep me");
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(sourceEditor()).toHaveValue("");
   });
 });

@@ -51,6 +51,22 @@ import {
   titleFromFileName,
 } from "./fileService";
 import { sampleDocument } from "./sampleDocument";
+import {
+  addDocument,
+  createEmptyDocument,
+  createSession,
+  documentFromFile,
+  getActive,
+  isDocumentDirty,
+  openDocumentInSession,
+  pushDocumentHistory,
+  redoDocument,
+  replaceActive,
+  setActive,
+  closeDocument,
+  undoDocument,
+  type EditorSession,
+} from "./documentSession";
 
 type ViewMode = "edit" | "split" | "preview";
 type SaveTone = "neutral" | "success" | "error";
@@ -175,15 +191,21 @@ marked.use({
 });
 
 export function App() {
-  const [markdown, setMarkdown] = useState(sampleDocument);
-  const [title, setTitle] = useState(untitledTitle);
-  const [documentPath, setDocumentPath] = useState<string | null>(null);
-  const [lastSavedMarkdown, setLastSavedMarkdown] = useState(sampleDocument);
+  const [session, setSession] = useState<EditorSession>(() =>
+    createSession(documentFromFile(crypto.randomUUID(), sampleDocument, untitledTitle, null)),
+  );
+  const scrollPositionsRef = useRef<Map<string, number>>(new Map());
+
+  const activeDoc = getActive(session);
+  const markdown = activeDoc.markdown;
+  const title = activeDoc.title;
+  const documentPath = activeDoc.path;
+  const history = activeDoc.history;
+  const historyIndex = activeDoc.historyIndex;
+  const selection = activeDoc.selection;
+
   const [mode, setMode] = useState<ViewMode>("split");
   const [slashIndex, setSlashIndex] = useState(0);
-  const [history, setHistory] = useState<string[]>([sampleDocument]);
-  const [historyIndex, setHistoryIndex] = useState(0);
-  const [selection, setSelection] = useState<TextSelection>({ start: 0, end: 0 });
   const [slashMenuPosition, setSlashMenuPosition] = useState<MenuPosition>({ top: 22, left: 24 });
   const [status, setStatus] = useState<{ message: string; tone: SaveTone }>({
     message: "Ready",
@@ -194,10 +216,9 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const slashMenuRef = useRef<HTMLDivElement>(null);
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const isDirtyRef = useRef(false);
 
   const nativeFiles = canUseNativeFileSystem();
-  const isDirty = markdown !== lastSavedMarkdown;
+  const isDirty = isDocumentDirty(activeDoc);
 
   const renderedHtml = useMemo(() => {
     const raw = marked.parse(markdown) as string;
@@ -259,16 +280,6 @@ export function App() {
     document.title = `${isDirty ? "* " : ""}${title} - ${appName}`;
   }, [isDirty, title]);
 
-  useEffect(() => {
-    isDirtyRef.current = isDirty;
-  }, [isDirty]);
-
-  function pushHistory(next: string) {
-    const nextHistory = [...history.slice(0, historyIndex + 1), next].slice(-80);
-    setHistory(nextHistory);
-    setHistoryIndex(nextHistory.length - 1);
-  }
-
   function getSelection(): TextSelection {
     const textarea = textareaRef.current;
     return {
@@ -277,15 +288,16 @@ export function App() {
     };
   }
 
+  function updateActiveSelection(next: TextSelection) {
+    setSession((current) => replaceActive(current, (doc) => ({ ...doc, selection: next })));
+  }
+
   function syncSelection(target = textareaRef.current) {
     if (!target) {
       return;
     }
 
-    setSelection({
-      start: target.selectionStart,
-      end: target.selectionEnd,
-    });
+    updateActiveSelection({ start: target.selectionStart, end: target.selectionEnd });
   }
 
   function updateSlashMenuPosition() {
@@ -321,7 +333,7 @@ export function App() {
   }
 
   function focusSelection(selectionStart: number, selectionEnd = selectionStart) {
-    setSelection({ start: selectionStart, end: selectionEnd });
+    updateActiveSelection({ start: selectionStart, end: selectionEnd });
     window.requestAnimationFrame(() => {
       textareaRef.current?.focus();
       textareaRef.current?.setSelectionRange(selectionStart, selectionEnd);
@@ -329,30 +341,48 @@ export function App() {
   }
 
   function commit(next: string, selectionStart?: number, selectionEnd = selectionStart) {
-    setMarkdown(next);
-    pushHistory(next);
-
+    setSession((current) => replaceActive(current, (doc) => pushDocumentHistory(doc, next)));
     if (selectionStart !== undefined) {
       focusSelection(selectionStart, selectionEnd);
     }
   }
 
+  function renameActive(nextTitle: string) {
+    setSession((current) => replaceActive(current, (doc) => ({ ...doc, title: nextTitle })));
+  }
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    const remembered = scrollPositionsRef.current.get(session.activeId) ?? 0;
+    textarea.scrollTop = remembered;
+    textarea.scrollLeft = 0;
+    textarea.setSelectionRange(activeDoc.selection.start, activeDoc.selection.end);
+    textarea.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.activeId]);
+
+  function onEditorScroll() {
+    updateSlashMenuPosition();
+    const textarea = textareaRef.current;
+    if (textarea) {
+      scrollPositionsRef.current.set(session.activeId, textarea.scrollTop);
+    }
+  }
+
   function loadDocument(contents: string, name: string, path: string | null) {
-    setMarkdown(contents);
-    setHistory([contents]);
-    setHistoryIndex(0);
-    setLastSavedMarkdown(contents);
-    setTitle(titleFromFileName(name));
-    setDocumentPath(path);
+    setSession((current) =>
+      openDocumentInSession(
+        current,
+        documentFromFile(crypto.randomUUID(), contents, titleFromFileName(name), path),
+      ),
+    );
     setStatus({ message: `Opened ${name}`, tone: "success" });
-    focusSelection(0, 0);
   }
 
   async function openNativePath(path: string) {
-    if (isDirtyRef.current && !window.confirm("Discard unsaved changes and open another document?")) {
-      return;
-    }
-
     try {
       const opened = await openNativeMarkdownPath(path);
       if (!opened) {
@@ -416,19 +446,8 @@ export function App() {
   }, [nativeFiles]);
 
   function resetDocument() {
-    if (isDirty && !window.confirm("Discard unsaved changes and create a new document?")) {
-      return;
-    }
-
-    const contents = "";
-    setMarkdown(contents);
-    setHistory([contents]);
-    setHistoryIndex(0);
-    setLastSavedMarkdown(contents);
-    setTitle(untitledTitle);
-    setDocumentPath(null);
+    setSession((current) => addDocument(current, createEmptyDocument(crypto.randomUUID())));
     setStatus({ message: "New document", tone: "neutral" });
-    focusSelection(0, 0);
   }
 
   function runTool(action: ToolAction) {
@@ -454,28 +473,19 @@ export function App() {
   }
 
   function undo() {
-    if (historyIndex <= 0) {
-      return;
-    }
-    const nextIndex = historyIndex - 1;
-    setHistoryIndex(nextIndex);
-    setMarkdown(history[nextIndex]);
+    setSession((current) => replaceActive(current, undoDocument));
   }
 
   function redo() {
-    if (historyIndex >= history.length - 1) {
-      return;
-    }
-    const nextIndex = historyIndex + 1;
-    setHistoryIndex(nextIndex);
-    setMarkdown(history[nextIndex]);
+    setSession((current) => replaceActive(current, redoDocument));
   }
 
   function onTextChange(event: ChangeEvent<HTMLTextAreaElement>) {
     const next = event.target.value;
-    setMarkdown(next);
-    pushHistory(next);
-    syncSelection(event.target);
+    const nextSelection = { start: event.target.selectionStart, end: event.target.selectionEnd };
+    setSession((current) =>
+      replaceActive(current, (doc) => ({ ...pushDocumentHistory(doc, next), selection: nextSelection })),
+    );
   }
 
   function chooseSlashCommand(index: number) {
@@ -488,10 +498,6 @@ export function App() {
   }
 
   async function openDocument() {
-    if (isDirty && !window.confirm("Discard unsaved changes and open another document?")) {
-      return;
-    }
-
     if (!nativeFiles) {
       fileInputRef.current?.click();
       return;
@@ -516,7 +522,7 @@ export function App() {
   async function saveDocument(forceSaveAs = false) {
     if (!nativeFiles) {
       downloadMarkdown();
-      setLastSavedMarkdown(markdown);
+      setSession((current) => replaceActive(current, (doc) => ({ ...doc, lastSavedMarkdown: doc.markdown })));
       setStatus({ message: "Downloaded Markdown", tone: "success" });
       return;
     }
@@ -534,9 +540,14 @@ export function App() {
         return;
       }
 
-      setDocumentPath(saved.path);
-      setTitle(titleFromFileName(saved.name));
-      setLastSavedMarkdown(markdown);
+      setSession((current) =>
+        replaceActive(current, (doc) => ({
+          ...doc,
+          path: saved.path,
+          title: titleFromFileName(saved.name),
+          lastSavedMarkdown: doc.markdown,
+        })),
+      );
       setStatus({ message: `Saved ${saved.name}`, tone: "success" });
     } catch (error) {
       setStatus({
@@ -666,7 +677,7 @@ export function App() {
             <input
               aria-label="Document title"
               value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              onChange={(event) => renameActive(event.target.value)}
             />
             <p className="document-path" title={pathLabel}>
               <span className={`save-state ${isDirty ? "dirty" : "clean"}`}>
@@ -755,7 +766,7 @@ export function App() {
               onClick={(event) => syncSelection(event.currentTarget)}
               onKeyDown={onEditorKeyDown}
               onKeyUp={(event) => syncSelection(event.currentTarget)}
-              onScroll={updateSlashMenuPosition}
+              onScroll={onEditorScroll}
               onSelect={(event) => syncSelection(event.currentTarget)}
               aria-label="Markdown source"
               aria-controls={slashMenuOpen ? slashMenuListboxId : undefined}
