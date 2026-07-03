@@ -391,12 +391,14 @@ export function App() {
       return;
     }
     textarea.setSelectionRange(activeDoc.selection.start, activeDoc.selection.end);
-    textarea.focus();
+    if (!pendingCloseId) {
+      textarea.focus();
+    }
     const remembered = scrollPositionsRef.current.get(session.activeId) ?? 0;
     textarea.scrollTop = remembered;
     textarea.scrollLeft = 0;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.activeId]);
+  }, [session.activeId, mode]);
 
   function onEditorScroll() {
     updateSlashMenuPosition();
@@ -893,7 +895,6 @@ export function App() {
       case "saveAs": return void saveDocument(true);
       case "closeTab": return requestCloseTab(session.activeId);
       case "exportHtml": return void exportHtml();
-      case "exportPdf":
       case "print": return void printDocument();
       case "undo": return undo();
       case "redo": return redo();
@@ -1054,7 +1055,7 @@ export function App() {
               <button
                 type="button"
                 className="tab-close"
-                aria-label={`Close ${doc.title}`}
+                aria-label={`Close ${doc.title || "Untitled document"}`}
                 onClick={(event) => {
                   event.stopPropagation();
                   requestCloseTab(doc.id);
@@ -1212,12 +1213,30 @@ export function App() {
               if (event.key === "Escape") {
                 event.preventDefault();
                 cancelPendingClose();
+                return;
+              }
+              if (event.key === "Tab") {
+                const buttons = Array.from(
+                  event.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
+                );
+                if (buttons.length === 0) {
+                  return;
+                }
+                event.preventDefault();
+                const index = buttons.findIndex((button) => button === document.activeElement);
+                const nextIndex =
+                  index === -1
+                    ? event.shiftKey
+                      ? buttons.length - 1
+                      : 0
+                    : (index + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length;
+                buttons[nextIndex].focus();
               }
             }}
           >
             <h2 id="unsaved-changes-title">Unsaved changes</h2>
             <p id="unsaved-changes-desc">
-              Do you want to save the changes you made to “{pendingCloseDoc.title}”? Your changes will be
+              Do you want to save the changes you made to “{pendingCloseDoc.title || "Untitled document"}”? Your changes will be
               lost if you don’t save them.
             </p>
             <div className="modal-actions">

@@ -241,17 +241,34 @@ describe("App", () => {
     expect(fileMocks.printNativeDocument).toHaveBeenCalled();
   });
 
-  it("routes Export as PDF through the same native print command", async () => {
-    fileMocks.canUseNativeFileSystem.mockReturnValue(true);
-
+  it("falls back to 'Untitled document' in the tab close label when the title is cleared", () => {
     render(<App />);
-    await waitFor(() => expect(menuHandler).toBeDefined());
 
-    await act(async () => {
-      menuHandler?.({ payload: "exportPdf" });
-    });
+    fireEvent.change(screen.getByRole("textbox", { name: /document title/i }), { target: { value: "" } });
 
-    expect(fileMocks.printNativeDocument).toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /close untitled document/i })).toBeInTheDocument();
+  });
+
+  it("falls back to 'Untitled document' in the unsaved-changes dialog when the title is cleared", () => {
+    render(<App />);
+    replaceEditorValue("# Dirty");
+    fireEvent.change(screen.getByRole("textbox", { name: /document title/i }), { target: { value: "" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(/changes you made to .Untitled document./i);
+  });
+
+  it("traps Tab focus within the unsaved-changes dialog", () => {
+    render(<App />);
+    replaceEditorValue("# Dirty");
+    fireEvent.click(screen.getByRole("button", { name: /close untitled document/i }));
+
+    const dialog = screen.getByRole("alertdialog");
+    screen.getByRole("button", { name: /^save$/i }).focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /^cancel$/i }));
   });
 
   it("surfaces a status message when native print fails", async () => {
